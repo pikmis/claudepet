@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from clawd.games import Ball
@@ -35,7 +37,7 @@ def test_ball_stays_in_the_window():
 
 def test_clawd_chases_and_kicks_the_ball():
     pet, fx = make_pet()
-    now = run(pet, 1, 1000.0)
+    now = run(pet, 1, time.monotonic())
     pet.start_ball(now, 12)
     pet.ball.x = pet.x + 400 if pet.x < 500 else pet.x - 400
     kicks = []
@@ -50,7 +52,7 @@ def test_ball_game_ends_when_nobody_plays():
     pet, fx = make_pet()
     ended = []
     pet.on_game_end = ended.append
-    now = run(pet, 1, 1000.0)
+    now = run(pet, 1, time.monotonic())
     pet.start_ball(now, 12)
     run(pet, 200, now, dt=0.1)
     assert pet.ball is None and ended == ["ball"] and "ball_end" in fx.said
@@ -58,7 +60,7 @@ def test_ball_game_ends_when_nobody_plays():
 
 def test_tag_flees_from_the_cursor_and_counts_catches():
     pet, fx = make_pet()
-    now = run(pet, 1, 1000.0)
+    now = run(pet, 1, time.monotonic())
     pet.start_tag(now)
     now = run(pet, 1.5, now)
     start = pet.x
