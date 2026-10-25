@@ -2,6 +2,7 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -24,7 +25,15 @@ jobs:
         run: pip install -r requirements-dev.txt pyinstaller
 
       - name: Test
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          python -m pytest -q --tb=short > pytest.log 2>&1 || {
+            cat pytest.log
+            echo "::error title=pytest failed::$(tail -c 1800 pytest.log | sed ':a;N;$!ba;s/
+/ | /g')"
+            exit 1
+          }
+          tail -n 3 pytest.log
 
       - name: Build Clawd.exe
         shell: bash
