@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 )
 
 from . import llm
-from .claude import persona
 
 TEXT = {
     "ru": {
@@ -34,7 +33,8 @@ TEXT = {
         "testing": "Проверяю…",
         "ok": "Работает. Ответ: {reply}",
         "fail": "Не вышло: {error}",
-        "hint_claude": "Нужен установленный и залогиненный Claude Code. Только в этом режиме Clawd умеет искать в интернете.",
+        "hint_claude": "Нужен установленный и залогиненный Claude Code. Модель: haiku, sonnet, opus или полное имя "
+        "(пусто — модель Claude Code по умолчанию). Только в этом режиме Clawd умеет искать в интернете.",
         "hint_api": "Подойдёт любой сервис с OpenAI-совместимым API (/chat/completions). Ключ хранится в settings.json "
         "на этом компьютере, у локальных серверов (Ollama, LM Studio) ключ не нужен.",
         "save": "Сохранить",
@@ -52,7 +52,8 @@ TEXT = {
         "testing": "Testing…",
         "ok": "Works. Reply: {reply}",
         "fail": "Failed: {error}",
-        "hint_claude": "Needs Claude Code installed and logged in. Web search in the chat works only in this mode.",
+        "hint_claude": "Needs Claude Code installed and logged in. Model: haiku, sonnet, opus or a full name "
+        "(empty: Claude Code's default). Web search in the chat works only in this mode.",
         "hint_api": "Any service with an OpenAI-compatible API (/chat/completions) works. The key is stored in "
         "settings.json on this computer; local servers (Ollama, LM Studio) need no key.",
         "save": "Save",
@@ -125,25 +126,34 @@ class AiDialog(QDialog):
 
     def defaults(self, name: str) -> dict:
         preset = llm.PRESETS.get(name)
-        return {"base": preset[1] if preset else "", "key": "", "model": preset[2][0] if preset else ""}
+        return {
+            "base": preset[1] if preset else "",
+            "key": "",
+            "model": preset[2][0] if preset else "haiku",
+        }
 
     def load_fields(self) -> None:
         name = self.provider.currentData()
         self.current = name
         api = name != "claude"
-        conf = {**self.defaults(name), **{k: v for k, v in self.config.get(name, {}).items() if v}}
+        saved = self.config.get(name, {})
+        conf = {**self.defaults(name), **{k: v for k, v in saved.items() if v}}
+        if name == "claude" and "model" in saved:
+            conf["model"] = saved["model"]  # an empty model is a choice here: Claude Code's default
         self.base.setText(conf["base"])
         self.key.setText(conf["key"])
         self.model.clear()
-        self.model.addItems(llm.PRESETS[name][2] if api else [])
+        self.model.addItems(llm.PRESETS[name][2] if api else ["haiku", "sonnet", "opus"])
         self.model.setCurrentText(conf["model"])
-        for widget in (self.base, self.key, self.show_key, self.model, self.test):
+        for widget in (self.base, self.key, self.show_key):
             widget.setEnabled(api)
         self.hint.setText(self.t["hint_api" if api else "hint_claude"])
         self.status.clear()
 
     def store_fields(self) -> None:
-        if self.current != "claude":
+        if self.current == "claude":
+            self.config["claude"] = {"model": self.model.currentText().strip()}
+        else:
             self.config[self.current] = {
                 "base": self.base.text().strip(),
                 "key": self.key.text().strip(),
@@ -151,14 +161,7 @@ class AiDialog(QDialog):
             }
 
     def switched(self) -> None:
-        # Remember what was typed for the provider we are leaving.
-        previous = self.current
-        if previous != "claude":
-            self.config[previous] = {
-                "base": self.base.text().strip(),
-                "key": self.key.text().strip(),
-                "model": self.model.currentText().strip(),
-            }
+        self.store_fields()  # remember what was typed for the provider we are leaving
         self.load_fields()
 
     def accept(self) -> None:
@@ -179,16 +182,14 @@ class AiDialog(QDialog):
 
         def work() -> None:
             try:
-                reply = llm.complete(base, key, model, persona("en"), "Reply with one short word: ok", name)
+                reply = self.test_fn(name, base, key, model)
                 self.tested.emit(True, " ".join(reply.split())[:80])
-            except llm.ApiError as e:
-                self.tested.emit(False, str(e))
             except Exception as e:  # never leave the button disabled
-                self.tested.emit(False, repr(e))
+                self.tested.emit(False, str(e) or repr(e))
 
         threading.Thread(target=work, name="clawd-api-test", daemon=True).start()
 
     def show_test(self, ok: bool, text: str) -> None:
-        self.test.setEnabled(self.provider.currentData() != "claude")
+        self.test.setEnabled(True)
         self.status.setStyleSheet("color: #2e9e5b;" if ok else "color: #c0392b;")
         self.status.setText(self.t["ok" if ok else "fail"].format(reply=text, error=text))

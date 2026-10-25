@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog
 
-from . import audio, claude, context, hooks
+from . import audio, claude, context, hooks, llm
 from .overlay import Overlay
 from .aidialog import AiDialog
 from .memory import Memory, SAVE_EVERY
@@ -154,8 +154,17 @@ class Clawd:
         conf = s.api_config()
         self.haiku.configure(s.provider, conf["base"], conf["key"], conf["model"])
 
+    def test_model(self, provider: str, base: str, key: str, model: str) -> str:
+        """A tiny request with the values typed into the settings window (runs off the UI thread)."""
+        prompt = "Reply with one short word: ok"
+        if provider != "claude":
+            return llm.complete(base, key, model, claude.persona("en"), prompt, provider)
+        if self.haiku.cli is None:
+            raise claude.HaikuError("claude CLI not found")
+        return claude.ask(self.haiku.cli, self.haiku.workdir, "en", prompt, False, model.strip())
+
     def open_ai_settings(self) -> None:
-        dialog = AiDialog(self.haiku.lang, self.settings.provider, self.settings.api)
+        dialog = AiDialog(self.haiku.lang, self.settings.provider, self.settings.api, self.test_model)
         if dialog.exec() != AiDialog.Accepted:
             return
         provider, api = dialog.result_config()

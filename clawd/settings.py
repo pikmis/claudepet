@@ -68,7 +68,7 @@ class Settings:
         return {
             "base": saved.get("base") or (preset[1] if preset else ""),
             "key": saved.get("key", ""),
-            "model": saved.get("model") or (preset[2][0] if preset else ""),
+            "model": saved.get("model") or (preset[2][0] if preset else "haiku" if provider == "claude" else ""),
         }
 
     @classmethod

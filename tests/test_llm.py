@@ -141,3 +141,38 @@ def test_settings_keep_api_choices_and_fill_presets(tmp_path):
     path.write_text('{"provider": "weird", "api": {"openai": {"key": 5, "model": "m"}, "bad": 1}}', encoding="utf-8")
     broken = Settings.load(path)
     assert broken.provider == "claude" and broken.api == {"openai": {"model": "m"}}
+
+
+def test_claude_model_falls_back_to_the_default_when_unavailable(tmp_path, monkeypatch):
+    from clawd import claude
+
+    calls = []
+
+    def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku"):
+        calls.append(model)
+        if model:
+            raise HaikuError("claude failed: There's an issue with the selected model (claude-haiku-4-5). It may not exist")
+        return "fine"
+
+    monkeypatch.setattr(claude, "ask", fake_ask)
+    haiku = Haiku(tmp_path, "en", True)
+    haiku.cli = tmp_path / "claude"
+    assert haiku.api_model == "haiku"
+    assert haiku.run(lambda lang: "x") == "fine"
+    assert calls == ["haiku", ""] and haiku.api_model == ""
+    assert haiku.run(lambda lang: "x") == "fine" and calls == ["haiku", "", ""]
+
+
+def test_claude_model_is_part_of_the_cli_arguments(tmp_path, monkeypatch):
+    from clawd import claude
+
+    seen = []
+
+    def fake_run(args, **kw):
+        seen.append(args)
+        return type("R", (), {"returncode": 0, "stdout": b"ok", "stderr": b""})()
+
+    monkeypatch.setattr(claude.subprocess, "run", fake_run)
+    claude.ask(tmp_path / "claude", tmp_path, "en", "hi", False, "sonnet")
+    claude.ask(tmp_path / "claude", tmp_path, "en", "hi", False, "")
+    assert seen[0][seen[0].index("--model") + 1] == "sonnet" and "--model" not in seen[1]

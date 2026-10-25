@@ -37,7 +37,7 @@ class Haiku:
         self.provider = "claude"  # or "openrouter", "openai", "custom": see llm.PRESETS
         self.api_base = ""
         self.api_key = ""
-        self.api_model = ""
+        self.api_model = "haiku"  # for Claude Code this is the --model alias; empty means its default
 
     def configure(self, provider: str, base: str = "", key: str = "", model: str = "") -> None:
         self.provider = provider if provider in llm.PROVIDERS else "claude"
@@ -59,7 +59,17 @@ class Haiku:
         cli = self.cli
         if cli is None:
             raise HaikuError("claude CLI not found", fatal=True)
-        return ask(cli, self.workdir, lang, prompt(lang), web)
+        text = prompt(lang)
+        try:
+            return ask(cli, self.workdir, lang, text, web, self.api_model)
+        except HaikuError as e:
+            # The account may not have the chosen model (the "haiku" alias can point at one it
+            # lacks): fall back to whatever Claude Code uses by default.
+            if self.api_model and ("selected model" in str(e) or "may not exist" in str(e)):
+                print(f"claude: model {self.api_model!r} unavailable, using the default", file=sys.stderr, flush=True)
+                self.api_model = ""
+                return ask(cli, self.workdir, lang, text, web, "")
+            raise
 
     def run_web(self, prompt) -> str:
         return self.run(prompt, web=True)
@@ -223,7 +233,7 @@ def verify(path: Path) -> str:
     raise HaikuError(f"unexpected --version output: {line}")
 
 
-def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False) -> str:
+def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False, model: str = "haiku") -> str:
     """Runs one headless Haiku turn with no MCP servers, skills or hooks. Its only possible
     tools are web search and fetch, when `web` is set; never the shell or files.
     `workdir` is a private folder, so no project CLAUDE.md gets loaded."""
@@ -232,8 +242,7 @@ def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False) -> 
         str(cli),
         *(["--allowedTools", tools] if web else []),
         "-p",
-        "--model",
-        "haiku",
+        *(["--model", model] if model else []),
         "--output-format",
         "text",
         "--no-session-persistence",
