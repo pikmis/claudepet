@@ -29,8 +29,7 @@ jobs:
         run: |
           python -m pytest -q --tb=short > pytest.log 2>&1 || {
             cat pytest.log
-            echo "::error title=pytest failed::$(tail -c 1800 pytest.log | sed ':a;N;$!ba;s/
-/ | /g')"
+            echo "::error title=pytest failed::$(tail -c 1800 pytest.log | tr -s '[:space:]' ' ')"
             exit 1
           }
           tail -n 3 pytest.log
