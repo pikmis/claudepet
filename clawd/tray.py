@@ -16,6 +16,7 @@ TEXT = {
     "pick": ("Указать путь к claude…", "Locate claude…"),
     "hooks": ("Связать с Claude Code", "Connect to Claude Code"),
     "ask": ("Разрешения из пузыря", "Permissions from the bubble"),
+    "forget": ("Забыть всё обо мне", "Forget everything about me"),
     "games": ("Игры", "Games"),
     "ball": ("Мячик", "Ball"),
     "tag": ("Догонялки", "Tag"),
@@ -68,6 +69,7 @@ class TrayMenu:
         self.watch = action("watch", settings.watch, lambda on: controller.set_watch(on))
         self.llm = action("llm", settings.llm, lambda on: controller.set_llm(on))
         self.ask = action("ask", settings.ask, lambda on: controller.set_ask(on))
+        self.forget = action("forget", slot=lambda: controller.forget())
         self.pick = action("pick", slot=lambda: controller.pick_claude())
         self.link = action("hooks", controller.hooks_installed(), self._link)
 
@@ -122,6 +124,7 @@ class TrayMenu:
             (self.watch, "watch"),
             (self.llm, "llm"),
             (self.ask, "ask"),
+            (self.forget, "forget"),
             (self.pick, "pick"),
             (self.link, "hooks"),
             (self.quit, "quit"),

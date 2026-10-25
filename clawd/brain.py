@@ -83,6 +83,8 @@ class Brain:
         if pet.music:
             lines.append("- Music is playing.")
         lines.append(f"- Clawd is {STATE_NAMES.get(pet.state, 'busy with his own things')}.")
+        lines.append(f"- {pet.mood.describe()}")
+        lines.extend(f"- {fact}" for fact in pet.memory.summary())
         projects = [s["project"] for s in pet.claude_sessions.values() if s.get("project")]
         if projects:
             lines.append(f"- Claude Code is working on a task in {', '.join(projects)}.")

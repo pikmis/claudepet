@@ -6,11 +6,12 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from . import audio, claude, context, hooks
 from .overlay import Overlay
+from .memory import Memory, SAVE_EVERY
 from .settings import Settings, config_dir, data_dir
 from .tray import TrayMenu, app_icon, text
 
@@ -56,7 +57,8 @@ class Clawd:
             self.watching.set()
         self.token = hooks.load_token(directory)
 
-        self.overlay = Overlay(self.haiku, self.post)
+        self.memory = Memory(directory / "memory.json")
+        self.overlay = Overlay(self.haiku, self.post, self.memory)
         self.tray = TrayMenu(self)
 
         # Looking through the login shell can take a few seconds; don't hold up startup.
@@ -76,6 +78,10 @@ class Clawd:
             self.server = None
             log(f"Claude Code hook endpoint unavailable: {e}")
 
+        self.overlay.on_game_started = lambda name: self.tray.set_checked(getattr(self.tray, name), True)
+        self.save_timer = QTimer()
+        self.save_timer.timeout.connect(lambda: self.memory.save())
+        self.save_timer.start(int(SAVE_EVERY * 1000))
         self.overlay.pet.on_game_end = lambda name: self.tray.set_checked(getattr(self.tray, name), False)
         self.overlay.start()
 
@@ -146,6 +152,11 @@ class Clawd:
     def set_ask(self, on: bool) -> None:
         self.update(lambda s: setattr(s, "ask", on))
 
+    def forget(self) -> None:
+        self.memory.forget()
+        self.overlay.pet.mood.affection = self.memory.affection
+        self.overlay.say("forgot", True)
+
     def hooks_installed(self) -> bool:
         path = hooks.settings_path()
         return bool(path) and hooks.is_installed(path)
@@ -175,6 +186,8 @@ class Clawd:
         self.overlay.set_language(lang)
 
     def quit(self) -> None:
+        self.memory.affection = self.overlay.pet.mood.affection
+        self.memory.save(force=True)
         self.tray.tray.hide()
         if self.server is not None:
             self.server.shutdown()

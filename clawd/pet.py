@@ -4,8 +4,11 @@ from __future__ import annotations
 import math
 import random
 import time
+from datetime import datetime
 
 from .games import Ball
+from .memory import Memory
+from .mood import Mood
 from .pet_math import clamp
 from .sprite import GRID_H, GRID_W, SPINNER_LENGTH, Frame
 
@@ -37,6 +40,8 @@ FAST_TYPING_KPM = 250
 RUN_SPEED = 190
 FLEE_SPEED = 240
 TAG_RADIUS = 210
+LATE_NIGHT_EVERY = 45 * 60
+OFFER_EVERY = 20 * 60
 GAME_LENGTH = 180  # the ball goes away after this many seconds nobody touches it
 
 
@@ -53,10 +58,18 @@ class Bounds:
 
 
 class Pet:
-    def __init__(self, unit: float, fx) -> None:
+    def __init__(self, unit: float, fx, memory: Memory | None = None, mood: Mood | None = None, hour=None) -> None:
         """`fx` receives side effects: say(category, force, vars), say_text(text, force),
-        spawn(kind) and hide_bubble()."""
+        spawn(kind), hide_bubble() and, optionally, start_game(name)."""
         self.fx = fx
+        self.memory = memory or Memory()
+        self.mood = mood or Mood(self.memory.affection)
+        self.hour = hour or (lambda: datetime.now().hour)
+        self.greet_at = 0.0
+        self.next_offer = 0.0
+        self.last_late_night = -math.inf
+        self.next_memory_sync = 0.0
+        self.mood_quiet_until = 0.0  # moods speak up only now and then
         self.w = self.h = 0.0
         self.x = self.y = 0.0
         self.unit = unit
@@ -186,6 +199,17 @@ class Pet:
             self.ready = True
             self.hop(420)
             self.fx.say("hello")
+            self.greet_at = now + 4
+
+        ignored = now - self.last_interaction
+        attended = ignored < 20 or self.held or self.ball is not None or self.tag
+        self.mood.update(dt, self.hour(), self.state == "sleep", attended, ignored)
+        if now >= self.next_memory_sync:
+            self.next_memory_sync = now + 30
+            self.memory.affection = self.mood.affection
+        if self.greet_at and now >= self.greet_at:
+            self.greet_at = 0.0
+            self.greet()
 
         if self.ball is not None:
             self.ball.step(dt, b.width, b.height)
@@ -249,7 +273,7 @@ class Pet:
                 self.x = clamp(self.x, b.min_x, b.max_x)
 
         if self.y < b.max_y - 0.5 and not self.hop_active:
-            self.fall(WALK_SPEED * self.look if self.state == "walk" else 0)
+            self.fall(self.walk_speed() * self.look if self.state == "walk" else 0)
             return
         self.y = min(self.y, b.max_y)
 
@@ -259,7 +283,7 @@ class Pet:
         if self.state == "walk":
             direction = 1 if self.walk_target > self.x else -1
             self.look = direction
-            self.x += direction * WALK_SPEED * dt
+            self.x += direction * self.walk_speed() * dt
             reached = (direction > 0 and self.x >= self.walk_target) or (direction < 0 and self.x <= self.walk_target)
             hit_edge = (direction < 0 and self.x <= b.min_x) or (direction > 0 and self.x >= b.max_x)
             if reached or hit_edge:
@@ -311,7 +335,8 @@ class Pet:
             self.look = attention
 
         busy = self.music or bool(self.claude_sessions)
-        if now - self.last_interaction > SLEEP_AFTER and not busy and not self.hop_active and not self.walk_in:
+        sleep_after = SLEEP_AFTER * (0.5 if self.mood.label == "sleepy" else 1)
+        if now - self.last_interaction > sleep_after and not busy and not self.hop_active and not self.walk_in:
             self.go_to_sleep(now, now + rand(*DEEP_SLEEP) * 60)
             self.fx.hide_bubble()
             return
@@ -319,6 +344,8 @@ class Pet:
         if now < self.next_action or self.hop_active or self.walk_in:
             return
         self.next_action = now + rand(3.5, 9)
+        if self.act_on_mood(now):
+            return
         if now >= self.next_activity and now - self.last_interaction > 8 and random.random() < 0.3:
             self.start_activity(now)
             return
@@ -338,6 +365,70 @@ class Pet:
             self.hop(360)
         else:
             self.wave_until = now + 1.6
+
+    def walk_speed(self) -> float:
+        return WALK_SPEED * (0.75 + 0.5 * self.mood.energy)
+
+    def greet(self) -> None:
+        """Right after he appears: say he missed the user, or greet them for the time of day."""
+        if self.memory.launches > 1 and self.memory.gap_seconds >= 8 * 3600:
+            self.fx.say("reunion", True, {"gap": self.memory.gap_seconds})
+            return
+        hour = self.hour()
+        part = (
+            "morning" if 5 <= hour < 11 else "lunch" if 12 <= hour < 14 else "evening" if 18 <= hour < 22
+            else "night" if hour >= 23 or hour < 4 else None
+        )
+        if part:
+            self.fx.say(f"greet_{part}")
+
+    def act_on_mood(self, now: float) -> bool:
+        """Moods nudge what he does with a quiet moment. True when it used this one up."""
+        label = self.mood.label
+        talk = now >= self.mood_quiet_until
+
+        def speak(category: str) -> None:
+            self.mood_quiet_until = now + rand(60, 150)
+            self.fx.say(category)
+
+        if label == "sulking":
+            self.look = random.choice((-1, 1))
+            if talk and random.random() < 0.5:
+                speak("sulk")
+            return True
+        if label == "sleepy" and talk and random.random() < 0.4:
+            speak("yawn")
+            return True
+        if label == "bored" and talk and random.random() < 0.6:
+            return self.seek_attention(now)
+        if label == "happy" and random.random() < 0.15:
+            self.hop(400)
+            self.fx.spawn("heart")
+            return True
+        return False
+
+    def seek_attention(self, now: float) -> bool:
+        """Bored: go and stand by the cursor, and every so often bring a ball."""
+        if self.claude_sessions or self.music or self.ball is not None or self.tag:
+            return False
+        start_game = getattr(self.fx, "start_game", None)
+        if self.mood.boredom > 0.9 and now >= self.next_offer and start_game:
+            self.next_offer = now + OFFER_EVERY
+            self.fx.say("ball_offer", True)
+            start_game("ball")
+            return True
+        c, b = self.cursor, self.bounds
+        if c and now - c[2] < 180:
+            target = clamp(c[0] - self.w / 2, b.min_x, b.max_x)
+            if abs(target - self.x) > 60:
+                self.walk_target = target
+                self.state = "walk"
+                self.mood_quiet_until = now + rand(60, 150)
+                self.fx.say("bored_poke")
+                return True
+        self.mood_quiet_until = now + rand(60, 150)
+        self.fx.say("bored_poke")
+        return True
 
     def start_activity(self, now: float) -> None:
         # No naps while music is playing.
@@ -454,6 +545,7 @@ class Pet:
         self.ball = Ball(x, radius, radius)
         self.ball.last_touched = now
         self.last_interaction = now
+        self.mood.cheer(0.4, 0.02)
         self.fx.say("ball_start", True)
 
     def stop_ball(self, phrase: str | None = None) -> None:
@@ -471,6 +563,7 @@ class Pet:
         self.tag_grace = now + 1.0
         self.game_until = now + 120
         self.last_interaction = now
+        self.mood.cheer(0.4, 0.02)
         self.fx.say("tag_start", True)
 
     def stop_tag(self, phrase: str | None = None) -> None:
@@ -522,6 +615,7 @@ class Pet:
             direction = -direction
         ball.kick(direction * rand(380, 760), -rand(650, 1000), now)
         self.next_kick = now + 0.6
+        self.mood.cheer(0.0, 0.002)
         self.look = direction
         self.hop(300)
         if random.random() < 0.3:
@@ -571,6 +665,7 @@ class Pet:
             sessions[sid] = session
 
         if kind == "start":
+            self.memory.note_project(event.get("project") or "")
             touch()
             self.last_interaction = now
             self.start_work(now, True)
@@ -605,6 +700,7 @@ class Pet:
             self.wave_until = now + 2.5
             for _ in range(3):
                 self.fx.spawn("spark")
+            self.mood.cheer(0.0, 0.02)
             self.fx.say("claude_done", True, {"project": event.get("project")})
             self.report_at = now + 3
         elif kind == "report":
@@ -632,6 +728,11 @@ class Pet:
             return
         if kpm > 0:
             self.note_user_input(now)
+            self.memory.note_activity()
+            hour = self.hour()
+            if 1 <= hour < 5 and now - self.last_late_night > LATE_NIGHT_EVERY and self.can_chat():
+                self.last_late_night = now
+                self.fx.say("late_night", True)
         if kpm < FAST_TYPING_KPM:
             self.fast_typing_since = 0.0
             return
@@ -930,6 +1031,8 @@ class Pet:
             if self.hop_vy < 0:
                 squash = -1
                 arms = "up"
+        if state == "idle" and self.mood._label == "sulking" and not self.hop_active:
+            eyes, arms, look = "sleep", "tuck", self.look or -1
         if now < self.expr_until and self.expr and state != "sleep":
             eyes = self.expr
             if self.expr == "happy":
@@ -981,6 +1084,7 @@ class Pet:
             "oy": y - self.y,
             "hist": [(now, x, y)],
             "anchor": x,
+            "sulking": self.mood.label == "sulking",
             "dir": 0,
             "vx": 0.0,
         }
@@ -1025,6 +1129,8 @@ class Pet:
                 direction = 1 if dx > 0 else -1
                 if touch["dir"] and direction != touch["dir"]:
                     self.fx.spawn("heart")
+                    self.mood.cheer(0.08, 0.04)
+                    self.memory.note_pet()
                 touch["dir"] = direction
                 touch["anchor"] = x
 
@@ -1037,10 +1143,14 @@ class Pet:
         if self.state == "drag":
             self.release_drag(now, touch, cancelled)
         elif self.state == "pet":
+            was_sulking = touch["sulking"]
+            self.mood.cheer(0.4, 0.05)
             self.state = "idle"
             self.set_expr("happy", 2.2, now)
             self.next_action = now + rand(3, 6)
-            if random.random() < 0.6:
+            if was_sulking and self.mood.label != "sulking":
+                self.fx.say("forgive", True)
+            elif random.random() < 0.6:
                 self.fx.say("pet")
         elif self.state == "press":
             self.state = "idle"
@@ -1091,9 +1201,11 @@ class Pet:
         self.recent_taps.append(now)
         if len(self.recent_taps) >= 6:
             self.recent_taps = []
+            self.mood.annoy(0.1)
             self.set_expr("angry", 2.5, now)
             self.fx.say("annoyed", True)
             return
+        self.mood.cheer(0.1, 0.01)
         self.squash_until = now + 0.12
         self.set_expr("surprised", 0.45, now)
         self.hop(330)

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QWidget
 
 from . import claude
 from .brain import Brain
+from .memory import Memory
 from .pet import Pet
 from .phrases import PHRASES, TOOL_PHRASES
 from .sprite import GRID_H, GRID_W, Frame, render_ball, render_particle, render_pet
@@ -39,6 +40,13 @@ BUTTON_LABELS = {
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 
+def format_gap(seconds: float, lang: str) -> str:
+    hours = max(1, int(seconds // 3600))
+    if hours < 48:
+        return f"{hours} ч" if lang == "ru" else f"{hours} h"
+    return f"{hours // 24} дн." if lang == "ru" else f"{hours // 24} d"
+
+
 def ease_out(t: float) -> float:
     return 1 - (1 - t) ** 2
 
@@ -48,7 +56,7 @@ class Particle:
 
 
 class Overlay(QWidget):
-    def __init__(self, haiku: claude.Haiku, post) -> None:
+    def __init__(self, haiku: claude.Haiku, post, memory: Memory | None = None) -> None:
         flags = (
             Qt.Tool
             | Qt.FramelessWindowHint
@@ -66,7 +74,9 @@ class Overlay(QWidget):
         self.haiku = haiku
         self.lang = haiku.lang
         self.brain = Brain(haiku, post)
-        self.pet = Pet(UNIT, self)
+        self.memory = memory or Memory()
+        self.pet = Pet(UNIT, self, self.memory)
+        self.on_game_started = None  # called with the game's name when he starts one himself
         self.ball_pixmap = None
         self.perms: list[dict] = []  # permission questions waiting for an answer
         self.on_decision = None  # called with (request id, "allow" | "deny" | None)
@@ -156,11 +166,17 @@ class Overlay(QWidget):
     def say(self, category: str, force: bool = False, values: dict | None = None) -> None:
         """`values` fill {placeholders}; lines that need a missing one are skipped."""
         values = values or {}
-        if category == "idle" and random.random() < 0.75:
-            generated = self.brain.take()
-            if generated:
-                self.say_text(generated, force)
-                return
+        if isinstance(values.get("gap"), (int, float)):
+            values = {**values, "gap": format_gap(values["gap"], self.lang)}
+        if category == "idle":
+            if random.random() < 0.75:
+                generated = self.brain.take()
+                if generated:
+                    self.say_text(generated, force)
+                    return
+            mood_lines = f"idle_{self.pet.mood.label}"
+            if mood_lines in PHRASES[self.lang] and random.random() < 0.5:
+                category = mood_lines
         everything = self.lines_for(category, values)
         usable = [p for p in everything if all(values.get(k) for k in PLACEHOLDER.findall(p))]
         phrases = usable or everything
@@ -299,6 +315,12 @@ class Overlay(QWidget):
         self.brain.forget()
         self.say("language", True)
 
+    def start_game(self, name: str) -> None:
+        """He asked for a game himself."""
+        self.set_game(name, True)
+        if self.on_game_started:
+            self.on_game_started(name)
+
     def set_game(self, name: str, on: bool) -> None:
         now = time.monotonic()
         if name == "ball":
@@ -318,6 +340,8 @@ class Overlay(QWidget):
 
     def on_context(self, event: dict) -> None:
         now = time.monotonic()
+        if event["kind"] == "window" and event.get("app"):
+            self.memory.note_window(event["app"])
         self.pet.on_typing(event["kpm"] if event["kind"] == "typing" else None, now)
         app = self.brain.on_context(event, now)
         if not app or not self.pet.can_chat():
