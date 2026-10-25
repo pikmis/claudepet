@@ -105,8 +105,19 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Хочется отдельный `.exe` — подойдёт `pip install pyinstaller` и
-`pyinstaller --noconsole --name Clawd -m clawd` (на Linux — пакетами/AppImage по вкусу).
+## Релизы
+
+Готовый `Clawd.exe` для Windows собирает GitHub Actions ([release.yml](.github/workflows/release.yml)):
+при пуше тега `v*` прогоняет тесты, собирает PyInstaller-ом один файл и прикрепляет его к релизу.
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Запустить сборку без релиза (артефакт будет на странице запуска) можно вручную: Actions → Release → Run workflow.
+Локально то же самое: `pip install pyinstaller` и
+`pyinstaller --onefile --noconsole --name Clawd --collect-all soundcard clawd.pyw`.
 
 ## Ограничения
 
