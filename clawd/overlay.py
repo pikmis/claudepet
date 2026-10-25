@@ -273,9 +273,27 @@ class Overlay(QWidget):
         self.schedule_repaint(now)
 
     def set_click_through(self, enabled: bool) -> None:
-        if self.windowHandle() is not None:
+        if not (sys.platform == "win32" and self._set_ex_transparent(enabled)) and self.windowHandle() is not None:
             self.windowHandle().setFlag(Qt.WindowTransparentForInput, enabled)
         self.passthrough = enabled
+
+    def _set_ex_transparent(self, enabled: bool) -> bool:
+        """Flips WS_EX_TRANSPARENT directly. Qt's own flag also refreshes the window frame,
+        which made patches of the layered window flash black while the cursor crossed Clawd."""
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+            hwnd = ctypes.c_void_p(int(self.winId()))
+            style = user32.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+            wanted = (style | 0x20) if enabled else (style & ~0x20)  # WS_EX_TRANSPARENT
+            if wanted != style:
+                user32.SetWindowLongW(hwnd, -20, wanted)
+            return True
+        except Exception:
+            return False
 
     def update_passthrough(self) -> None:
         """The window covers the whole work area, so it must let clicks through
