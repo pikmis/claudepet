@@ -42,6 +42,8 @@ FLEE_SPEED = 240
 TAG_RADIUS = 210
 LATE_NIGHT_EVERY = 45 * 60
 OFFER_EVERY = 20 * 60
+# How often Clawd says something of his own while idle.
+CHATTER_EVERY = (18, 35)
 GAME_LENGTH = 180  # the ball goes away after this many seconds nobody touches it
 
 
@@ -66,6 +68,9 @@ class Pet:
         self.mood = mood or Mood(self.memory.affection)
         self.hour = hour or (lambda: datetime.now().hour)
         self.greet_at = 0.0
+        self.chatting = False
+        self.awaiting_reply = False
+        self.next_chatter = time.monotonic() + rand(*CHATTER_EVERY)
         self.next_offer = 0.0
         self.last_late_night = -math.inf
         self.next_memory_sync = 0.0
@@ -176,6 +181,22 @@ class Pet:
         if self.state == "sleep" and now - self.last_user_input > AWAY_AFTER:
             self.wake_up(now, "welcome_back")
         self.last_user_input = now
+
+    def start_chat(self, now: float) -> None:
+        self.chatting = True
+        self.last_interaction = now
+        if self.state == "sleep":
+            self.wake_up(now, "chat_hello")
+            return
+        # Put the book or laptop away to talk, unless he's busy helping Claude.
+        if self.state in ACTIVITY_STATES and not self.claude_work:
+            self.state = "idle"
+        self.look = 0
+        self.fx.say("chat_hello", True)
+
+    def end_chat(self) -> None:
+        self.chatting = False
+        self.awaiting_reply = False
 
     def wake_up(self, now: float, phrase: str) -> None:
         self.nap_until = 0.0
@@ -333,6 +354,16 @@ class Pet:
         attention = self.attention(now)
         if attention is not None:
             self.look = attention
+
+        if self.chatting:
+            self.last_interaction = now
+            self.next_chatter = now + 10
+            self.next_action = max(self.next_action, now + 1)
+            return
+
+        if now >= self.next_chatter and now - self.last_interaction > 5 and not self.hop_active and not self.walk_in:
+            self.next_chatter = now + rand(*CHATTER_EVERY)
+            self.fx.say("idle")
 
         busy = self.music or bool(self.claude_sessions)
         sleep_after = SLEEP_AFTER * (0.5 if self.mood.label == "sleepy" else 1)
@@ -1039,6 +1070,9 @@ class Pet:
                 blush = True
         if now < self.squash_until and squash == 0:
             squash = 1
+        if self.awaiting_reply:
+            eyes = "up"
+            spinner = math.floor(now * 8) % SPINNER_LENGTH
         can_blink = state in ("idle", "walk", "hang", "code", "think")
         if now < self.blink_until and eyes in ("open", "up") and can_blink:
             eyes = "blink"

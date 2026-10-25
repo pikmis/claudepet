@@ -9,9 +9,10 @@ from datetime import datetime
 from . import claude
 from .claude import Haiku, HaikuError
 
-CACHE_TTL = 180
-REFILL_EVERY = 60
-WINDOW_COMMENT_EVERY = 60
+CACHE_TTL = 150
+REFILL_EVERY = 30
+CACHE_LOW = 4
+WINDOW_COMMENT_EVERY = 45
 APP_FORGET_AFTER = 15 * 60
 
 STATE_NAMES = {
@@ -80,6 +81,12 @@ class Brain:
             lines.append(f'- The user has this window open: "{self.window["title"]}"{app}.')
         if self.kpm > 0:
             lines.append(f"- The user is typing, about {self.kpm} key presses a minute.")
+        else:
+            idle = round((time.monotonic() - pet.last_user_input) / 60)
+            if idle >= 3:
+                lines.append(
+                    f"- The user hasn't touched the mouse or keyboard for about {idle} min; they seem away or idle."
+                )
         if pet.music:
             lines.append("- Music is playing.")
         lines.append(f"- Clawd is {STATE_NAMES.get(pet.state, 'busy with his own things')}.")
@@ -123,8 +130,8 @@ class Brain:
 
     def maybe_refill(self, pet, now: float) -> None:
         self.cache = [(text, at) for text, at in self.cache if now - at < CACHE_TTL]
-        interval = REFILL_EVERY if self.available else REFILL_EVERY * 5
-        if self.pending or len(self.cache) >= 3 or now - self.last_request < interval:
+        interval = REFILL_EVERY if self.available else REFILL_EVERY * 6
+        if self.pending or len(self.cache) >= CACHE_LOW or now - self.last_request < interval:
             return
 
         def done(lines: list[str]) -> None:

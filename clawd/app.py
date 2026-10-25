@@ -113,10 +113,16 @@ class Clawd:
         self.set_pet_visible(True)
         self.overlay.recall()
 
+    def open_chat(self) -> None:
+        self.set_pet_visible(True)
+        self.overlay.chat.open()
+
     def pet_visible(self) -> bool:
         return self.overlay.isVisible()
 
     def set_pet_visible(self, visible: bool) -> None:
+        if not visible:
+            self.overlay.chat.close()
         self.overlay.setVisible(visible)
         if visible:
             self.overlay.set_click_through(True)
@@ -186,6 +192,7 @@ class Clawd:
         self.overlay.set_language(lang)
 
     def quit(self) -> None:
+        self.overlay.chat.close()
         self.memory.affection = self.overlay.pet.mood.affection
         self.memory.save(force=True)
         self.tray.tray.hide()

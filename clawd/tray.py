@@ -8,6 +8,7 @@ from .sprite import GRID_W, Frame, render_pet
 
 TEXT = {
     "recall": ("Позвать Clawd", "Call Clawd"),
+    "chat": ("Поговорить с Clawd…", "Talk to Clawd…"),
     "hide": ("Спрятать", "Hide"),
     "show": ("Показать", "Show"),
     "listen": ("Слушать звук", "Listen to sound"),
@@ -63,6 +64,7 @@ class TrayMenu:
             return act
 
         self.recall = action("recall", slot=lambda: controller.recall())
+        self.chat = action("chat", slot=lambda: controller.open_chat())
         self.toggle = action("hide", slot=self._toggle)
         self.menu.addSeparator()
         self.listen = action("listen", settings.listen, lambda on: controller.set_listen(on))
@@ -119,6 +121,7 @@ class TrayMenu:
     def relabel(self, lang: str, visible: bool) -> None:
         for act, key in (
             (self.recall, "recall"),
+            (self.chat, "chat"),
             (self.toggle, "hide" if visible else "show"),
             (self.listen, "listen"),
             (self.watch, "watch"),

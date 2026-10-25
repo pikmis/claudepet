@@ -3,11 +3,14 @@ mode, so it runs on the user's own Claude Code login and needs no API key."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from .settings import LANGUAGE_NAMES
+from .shell import shell_name
 
 TIMEOUT = 90
 VERSION_TIMEOUT = 20
@@ -28,15 +31,19 @@ class Haiku:
         self.lang = lang
         self.enabled = enabled
 
-    def run(self, prompt) -> str:
-        """Runs a prompt written for the current language: `prompt(lang) -> str`."""
+    def run(self, prompt, web: bool = False) -> str:
+        """Runs a prompt written for the current language: `prompt(lang) -> str`.
+        With `web`, Haiku may search and read the web while answering."""
         if not self.enabled:
             raise HaikuError("disabled")
         cli = self.cli
         if cli is None:
             raise HaikuError("claude CLI not found")
         lang = self.lang
-        return ask(cli, self.workdir, lang, prompt(lang))
+        return ask(cli, self.workdir, lang, prompt(lang), web)
+
+    def run_web(self, prompt) -> str:
+        return self.run(prompt, web=True)
 
 
 def lang_name(lang: str) -> str:
@@ -197,11 +204,14 @@ def verify(path: Path) -> str:
     raise HaikuError(f"unexpected --version output: {line}")
 
 
-def ask(cli: Path, workdir: Path, lang: str, prompt: str) -> str:
-    """Runs one headless Haiku turn with no tools, MCP servers, skills or hooks.
+def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False) -> str:
+    """Runs one headless Haiku turn with no MCP servers, skills or hooks. Its only possible
+    tools are web search and fetch, when `web` is set; never the shell or files.
     `workdir` is a private folder, so no project CLAUDE.md gets loaded."""
+    tools = "WebSearch,WebFetch" if web else ""
     args = [
         str(cli),
+        *(["--allowedTools", tools] if web else []),
         "-p",
         "--model",
         "haiku",
@@ -209,7 +219,7 @@ def ask(cli: Path, workdir: Path, lang: str, prompt: str) -> str:
         "text",
         "--no-session-persistence",
         "--tools",
-        "",
+        tools,
         "--strict-mcp-config",
         "--disable-slash-commands",
         "--settings",
@@ -264,8 +274,10 @@ def phrases(output: str, max_chars: int) -> list[str]:
 def idle_prompt(lang: str, context: str, count: int) -> str:
     return (
         f"What is going on right now:\n{context}\n\nWrite {count} different short lines (up to 40 characters) "
-        f"that Clawd could say right now, in {lang_name(lang)}. Teasing the situation a little is welcome. "
-        "One per line."
+        f"that Clawd could say right now, in {lang_name(lang)}. Most lines should react to the situation "
+        "above (time of day, the open window, the music, whether the user is busy or idle). If the user seems "
+        "away or idle, gently tease it (e.g. hint that you've been standing around doing nothing). Keep a "
+        "couple of lines generic. Light, warm, geeky humour. One per line."
     )
 
 
@@ -282,3 +294,64 @@ def done_prompt(lang: str, project: str, last_message: str) -> str:
         f"In one short line (up to 60 characters) in {lang_name(lang)}, tell the user what was done "
         "and what to check."
     )
+
+
+def chat_prompt(lang: str, context: str, history: list, message: str) -> str:
+    """The prompt for a reply to something the user typed to Clawd in the chat box.
+    `history` holds earlier turns as [speaker, text], speaker being "user" or "clawd"."""
+    dialogue = ""
+    for who, text in history[-8:]:
+        dialogue += f"{'User' if who == 'user' else 'Clawd'}: {text}\n"
+    return (
+        f"What is going on right now:\n{context}\n\nConversation so far:\n{dialogue}User: {message}\n\n"
+        f"Answer the user as Clawd, in {lang_name(lang)}, in one or two short sentences (under 200 characters), "
+        "staying in character. Plain text only, no markdown or links. You may search the web if it helps.\n\n"
+        f"You can also offer to run ONE shell command on the user's computer ({shell_name()}). The user sees it "
+        "and must confirm before it runs. To offer one, put it alone on the last line as: COMMAND: <command>\n"
+        "Rules for commands: only when the user asks for something on their computer; prefer read-only "
+        "commands; before anything destructive (killing processes, deleting files) first offer a read-only "
+        "command that shows exactly what would be affected, and only then the destructive one with concrete "
+        "PIDs or paths; never touch the process named clawd or system-critical processes; no sudo, no "
+        "interactive programs."
+    )
+
+
+@dataclass
+class ChatReply:
+    """A chat answer: what Clawd says, and a shell command he offers to run, if any."""
+
+    text: str
+    command: str | None
+
+
+def strip_markdown(text: str) -> str:
+    """Turns markdown into plain text for the bubble: drops emphasis marks and keeps link text."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    return text.replace("**", "").replace("__", "").replace("`", "")
+
+
+def reply(output: str, max_chars: int) -> str | None:
+    """One clean reply for the speech bubble: no quotes, speaker prefix or markdown, whitespace collapsed."""
+    text = " ".join(strip_markdown(output).split())
+    if text.startswith("Clawd:"):
+        text = text[len("Clawd:") :].strip()
+    text = text.strip("\"«»“”").strip()
+    if not text:
+        return None
+    return text[:max_chars].rstrip() + "…" if len(text) > max_chars else text
+
+
+def parse_chat(output: str, max_chars: int) -> ChatReply | None:
+    """Splits Haiku's chat output into the spoken reply and an offered `COMMAND:` line."""
+    command = None
+    spoken = []
+    for line in output.splitlines():
+        trimmed = line.strip().strip("`").strip()
+        if trimmed.startswith("COMMAND:") and trimmed[len("COMMAND:") :].strip():
+            command = trimmed[len("COMMAND:") :].strip()
+        else:
+            spoken.append(line)
+    text = reply("\n".join(spoken), max_chars)
+    if text is None and command is None:
+        return None
+    return ChatReply(text or "", command)

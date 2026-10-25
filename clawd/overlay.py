@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QWidget
 
 from . import claude
 from .brain import Brain
+from .chat import Chat
 from .memory import Memory
 from .pet import Pet
 from .phrases import PHRASES, TOOL_PHRASES
@@ -76,6 +77,8 @@ class Overlay(QWidget):
         self.brain = Brain(haiku, post)
         self.memory = memory or Memory()
         self.pet = Pet(UNIT, self, self.memory)
+        self.bubble_lift = 0.0  # room the chat boxes take above Clawd's head
+        self.chat = Chat(self, haiku, post)
         self.on_game_started = None  # called with the game's name when he starts one himself
         self.ball_pixmap = None
         self.perms: list[dict] = []  # permission questions waiting for an answer
@@ -373,6 +376,8 @@ class Overlay(QWidget):
             pos = QCursor.pos() - self.geometry().topLeft()
             pet.set_cursor(pos.x(), pos.y(), now)
         pet.step(now)
+        if self.chat.is_open:
+            self.chat.place()
         self.update_passthrough()
         self.schedule_repaint(now)
 
@@ -436,7 +441,7 @@ class Overlay(QWidget):
         bw, bh = self.bubble_rect.width(), self.bubble_rect.height()
         margin = 4
         bx = min(max(pet.x + pet.w / 2 - bw / 2, margin), self.width() - bw - margin)
-        by = y + pet.unit - bh - margin
+        by = y + pet.unit - bh - margin - self.bubble_lift
         if by < 0:
             by = y + pet.h + margin
         self.bubble_rect = QRectF(bx, by, bw, bh)
@@ -547,6 +552,10 @@ class Overlay(QWidget):
 
     def mousePressEvent(self, event) -> None:
         pos = event.position()
+        if event.button() == Qt.RightButton:
+            if self.pet.hit_test(pos.x(), pos.y()):
+                self.chat.open()  # right-click on Clawd opens the chat box
+            return
         if event.button() != Qt.LeftButton:
             return
         for button, _, behavior in self.buttons:
