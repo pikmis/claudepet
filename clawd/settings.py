@@ -48,6 +48,7 @@ class Settings:
     listen: bool = True
     watch: bool = True
     llm: bool = True
+    ask: bool = True  # answer Claude Code's permission questions from the bubble
 
     def __post_init__(self) -> None:
         if self.language not in LANGUAGES:

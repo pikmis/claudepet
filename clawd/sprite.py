@@ -271,3 +271,29 @@ def render_particle(kind: str, s: int, dpr: float = 1.0) -> QPixmap:
     painter.end()
     pixmap.setDevicePixelRatio(dpr)
     return pixmap
+
+
+BALL_PATTERN = [
+    "..RRRR..",
+    ".RWWRRR.",
+    "RWWRRRRR",
+    "RWRRRRRR",
+    "RRRRRRRD",
+    "RRRRRRDD",
+    ".RRRDDD.",
+    "..DDDD..",
+]
+BALL_COLORS = {"R": "#e5484d", "W": "#ffd9db", "D": "#b3262c"}
+
+
+def render_ball(s: int, dpr: float = 1.0) -> QPixmap:
+    pixmap = QPixmap(8 * s, 8 * s)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    for y, row in enumerate(BALL_PATTERN):
+        for x, ch in enumerate(row):
+            if ch in BALL_COLORS:
+                painter.fillRect(x * s, y * s, s, s, _color(BALL_COLORS[ch]))
+    painter.end()
+    pixmap.setDevicePixelRatio(dpr)
+    return pixmap

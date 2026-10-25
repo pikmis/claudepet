@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import uuid
 import sys
 import threading
 import time
@@ -16,7 +17,13 @@ from .claude import Haiku, HaikuError
 
 PORT = 47823
 MARKER = "127.0.0.1:47823/hook/"
-EVENTS = ("UserPromptSubmit", "PreToolUse", "Stop", "Notification", "SessionEnd")
+EVENTS = ("UserPromptSubmit", "PreToolUse", "Stop", "Notification", "SessionEnd", "PermissionRequest")
+# How long a permission question waits for an answer from the bubble before Claude Code's
+# own dialog takes over. Claude Code shows nothing while the hook is still running.
+PERMISSION_WAIT = 20.0
+PERMISSION_HOOK_TIMEOUT = 30
+# Questions and plans have their own dialogs; answering "allow" would skip the actual choice.
+NOT_ASKED = {"AskUserQuestion", "ExitPlanMode"}
 MAX_BODY = 8 << 20
 TRANSCRIPT_TAIL = 256 << 10
 THOUGHT_EVERY = 20.0
@@ -151,13 +158,66 @@ def first_sentence(text: str, limit: int) -> str:
     return clip(plain[:end], limit)
 
 
+class Pending:
+    """A permission question somebody is deciding on."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.behavior: str | None = None
+
+
 class Hub:
-    def __init__(self, haiku: Haiku, emit) -> None:
+    def __init__(self, haiku: Haiku, emit, permissions_enabled=lambda: True) -> None:
         """`emit(event_dict)` may be called from any thread."""
         self.haiku = haiku
         self.emit = emit
+        self.permissions_enabled = permissions_enabled
         self.sessions: dict[str, dict] = {}
+        self.pending: dict[str, Pending] = {}
         self.lock = threading.Lock()
+
+    def permission(self, body) -> str:
+        """Asks the user through the pet. Returns the hook's stdout: a decision, or "" to let
+        Claude Code show its own dialog."""
+        if not self.permissions_enabled() or not isinstance(body, dict):
+            return ""
+        tool = str_field(body, "tool_name")
+        cwd = str_field(body, "cwd")
+        if not tool or tool in NOT_ASKED or (cwd and is_inside(cwd, self.haiku.workdir)):
+            return ""
+        event = {
+            "kind": "permission",
+            "id": uuid.uuid4().hex[:8],
+            "session": str_field(body, "session_id"),
+            "project": file_name(cwd),
+            "tool": tool,
+            "detail": tool_detail(tool, body.get("tool_input")),
+        }
+        pending = Pending()
+        with self.lock:
+            self.pending[event["id"]] = pending
+        self.emit(event)
+        answered = pending.done.wait(PERMISSION_WAIT)
+        with self.lock:
+            self.pending.pop(event["id"], None)
+        if not answered:
+            self.emit({"kind": "permission_done", "id": event["id"]})
+            return ""
+        if pending.behavior == "allow":
+            decision = {"behavior": "allow"}
+        elif pending.behavior == "deny":
+            decision = {"behavior": "deny", "message": "Declined from Clawd"}
+        else:
+            return ""
+        return json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}})
+
+    def resolve(self, request_id: str, behavior: str | None) -> None:
+        """The user answered: "allow", "deny", or None to decide in the terminal."""
+        with self.lock:
+            pending = self.pending.get(request_id)
+        if pending is not None:
+            pending.behavior = behavior
+            pending.done.set()
 
     def ask_haiku(self, prompt, limit: int) -> str | None:
         """Runs Haiku if it's available and enabled; None means "fall back to plain text"."""
@@ -232,6 +292,7 @@ class Hub:
 def serve(token: str, hub: Hub) -> ThreadingHTTPServer:
     """Starts the hook endpoint on a background thread; raises OSError if the port is taken."""
     path = f"/hook/{token}"
+    ask_path = f"{path}/permission"
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -240,11 +301,13 @@ def serve(token: str, hub: Hub) -> ThreadingHTTPServer:
         def log_message(self, *args) -> None:  # silence the default access log
             pass
 
-        def _reply(self, status: int) -> None:
+        def _reply(self, status: int, body: bytes = b"") -> None:
             self.send_response(status)
-            self.send_header("Content-Length", "0")
+            self.send_header("Content-Length", str(len(body)))
             self.send_header("Connection", "close")
             self.end_headers()
+            if body:
+                self.wfile.write(body)
             self.close_connection = True
 
         def do_POST(self) -> None:
@@ -252,7 +315,7 @@ def serve(token: str, hub: Hub) -> ThreadingHTTPServer:
                 length = int(self.headers.get("Content-Length", ""))
             except ValueError:
                 length = -1
-            if self.path != path or not 0 <= length <= MAX_BODY:
+            if self.path not in (path, ask_path) or not 0 <= length <= MAX_BODY:
                 self._reply(404)
                 return
             try:
@@ -261,11 +324,20 @@ def serve(token: str, hub: Hub) -> ThreadingHTTPServer:
                 return
             if len(data) != length:
                 return
-            self._reply(204)
             try:
                 value = json.loads(data)
             except ValueError:
+                self._reply(204)
                 return
+            if self.path == ask_path:
+                try:
+                    answer = hub.permission(value)
+                except Exception as e:
+                    print(f"hook: {e}", file=sys.stderr)
+                    answer = ""
+                self._reply(200 if answer else 204, answer.encode("utf-8"))
+                return
+            self._reply(204)
             try:
                 hub.handle(value)
             except Exception as e:  # a bad payload must not kill the endpoint
@@ -310,13 +382,19 @@ def hook_command(token: str) -> str:
     return f"curl -s -m 2 -o /dev/null -H Content-Type:application/json --data-binary @- http://{MARKER}{token} || true"
 
 
+def permission_command(token: str) -> str:
+    """Unlike the others this one waits for the answer and prints it for Claude Code."""
+    wait = PERMISSION_HOOK_TIMEOUT - 5
+    return f"curl -s -m {wait} -H Content-Type:application/json --data-binary @- http://{MARKER}{token}/permission || true"
+
+
 def is_clawd_group(group) -> bool:
     hooks = group.get("hooks") if isinstance(group, dict) else None
     return isinstance(hooks, list) and any(MARKER in str_field(h, "command") for h in hooks)
 
 
-def with_hooks(settings, command: str | None):
-    """Removes Clawd's hooks from settings and, given a command, adds fresh ones."""
+def with_hooks(settings, token: str | None):
+    """Removes Clawd's hooks from settings and, given a token, adds fresh ones."""
     if not isinstance(settings, dict):
         raise ValueError("settings.json is not a JSON object")
     hooks = settings.setdefault("hooks", {})
@@ -327,9 +405,13 @@ def with_hooks(settings, command: str | None):
         if not isinstance(groups, list):
             raise ValueError(f"hooks.{event} is not an array")
         groups[:] = [g for g in groups if not is_clawd_group(g)]
-        if command is not None:
-            hook = {"type": "command", "command": command, "timeout": 5}
-            groups.append({"matcher": "*", "hooks": [hook]} if event == "PreToolUse" else {"hooks": [hook]})
+        if token is not None:
+            if event == "PermissionRequest":
+                hook = {"type": "command", "command": permission_command(token), "timeout": PERMISSION_HOOK_TIMEOUT}
+            else:
+                hook = {"type": "command", "command": hook_command(token), "timeout": 5}
+            with_matcher = event in ("PreToolUse", "PermissionRequest")
+            groups.append({"matcher": "*", "hooks": [hook]} if with_matcher else {"hooks": [hook]})
         if not groups:
             del hooks[event]
     if not hooks:
@@ -339,7 +421,9 @@ def with_hooks(settings, command: str | None):
 
 def is_installed(path: Path) -> bool:
     try:
-        return MARKER in Path(path).read_text(encoding="utf-8")
+        text = Path(path).read_text(encoding="utf-8")
+        # Links made before permission questions existed need to be redone.
+        return MARKER in text and "/permission" in text
     except OSError:
         return False
 
@@ -358,7 +442,7 @@ def set_installed(path: Path, token: str | None) -> None:
             raise ValueError(f"settings.json is not valid JSON: {e}") from e
     else:
         settings = {}
-    updated = with_hooks(settings, hook_command(token) if token else None)
+    updated = with_hooks(settings, token or None)
     if original is not None:
         backup = path.with_name(path.name + ".clawd-backup")
         if not backup.exists():

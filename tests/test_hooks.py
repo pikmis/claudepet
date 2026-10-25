@@ -9,7 +9,6 @@ import pytest
 from clawd import hooks
 from clawd.hooks import (
     first_sentence,
-    hook_command,
     is_installed,
     last_assistant_text,
     parse,
@@ -23,12 +22,12 @@ def test_install_keeps_user_settings_and_uninstall_restores_them():
         "model": "opus",
         "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}]}]},
     }
-    installed = with_hooks(json.loads(json.dumps(user)), hook_command("abc"))
+    installed = with_hooks(json.loads(json.dumps(user)), "abc")
     assert installed["model"] == "opus"
     assert len(installed["hooks"]["Stop"]) == 2
     assert installed["hooks"]["PreToolUse"][0]["matcher"] == "*"
     # Reinstalling replaces rather than duplicates.
-    again = with_hooks(installed, hook_command("def"))
+    again = with_hooks(installed, "def")
     assert len(again["hooks"]["Stop"]) == 2
     text = json.dumps(again)
     assert "/hook/def" in text and "/hook/abc" not in text
@@ -130,3 +129,69 @@ def test_endpoint_accepts_only_the_right_token(monkeypatch):
         assert received == [{"a": 1}]
     finally:
         server.shutdown()
+
+
+def _hub(tmp_path, enabled=True):
+    from clawd.claude import Haiku
+
+    events = []
+    hub = hooks.Hub(Haiku(tmp_path / "haiku", "en", False), events.append, permissions_enabled=lambda: enabled)
+    return hub, events
+
+
+def _ask(hub, **fields):
+    body = {"hook_event_name": "PermissionRequest", "session_id": "s", "cwd": "/home/u/proj", "tool_name": "Bash",
+            "tool_input": {"command": "npm test"}, **fields}
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(out=hub.permission(body)))
+    thread.start()
+    return thread, result
+
+
+def test_permission_waits_for_the_answer_and_returns_a_decision(tmp_path):
+    hub, events = _hub(tmp_path)
+    thread, result = _ask(hub)
+    while not events:
+        thread.join(0.01)
+    asked = events[0]
+    assert asked["kind"] == "permission" and asked["tool"] == "Bash" and asked["detail"] == "npm test"
+    hub.resolve(asked["id"], "allow")
+    thread.join(5)
+    decision = json.loads(result["out"])["hookSpecificOutput"]
+    assert decision["hookEventName"] == "PermissionRequest" and decision["decision"] == {"behavior": "allow"}
+
+
+def test_permission_deny_and_terminal(tmp_path):
+    hub, events = _hub(tmp_path)
+    for answer, expected in (("deny", "deny"), (None, "")):
+        events.clear()
+        thread, result = _ask(hub)
+        while not events:
+            thread.join(0.01)
+        hub.resolve(events[0]["id"], answer)
+        thread.join(5)
+        assert (json.loads(result["out"])["hookSpecificOutput"]["decision"]["behavior"] if expected else result["out"]) == expected
+
+
+def test_permission_times_out_to_the_normal_dialog(tmp_path, monkeypatch):
+    monkeypatch.setattr(hooks, "PERMISSION_WAIT", 0.05)
+    hub, events = _hub(tmp_path)
+    thread, result = _ask(hub)
+    thread.join(5)
+    assert result["out"] == ""
+    assert [e["kind"] for e in events] == ["permission", "permission_done"]
+
+
+def test_permission_ignores_questions_plans_and_disabled(tmp_path):
+    hub, events = _hub(tmp_path)
+    assert hub.permission({"tool_name": "AskUserQuestion", "cwd": "/x"}) == ""
+    assert hub.permission({"tool_name": "ExitPlanMode", "cwd": "/x"}) == ""
+    assert events == []
+    off, off_events = _hub(tmp_path, enabled=False)
+    assert off.permission({"tool_name": "Bash", "cwd": "/x"}) == "" and off_events == []
+
+
+def test_old_links_without_permissions_count_as_not_installed(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{"x": "curl http://127.0.0.1:47823/hook/abc"}', encoding="utf-8")
+    assert not is_installed(path)

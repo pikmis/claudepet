@@ -15,6 +15,10 @@ TEXT = {
     "llm": ("Реплики через Claude (Haiku)", "Lines from Claude (Haiku)"),
     "pick": ("Указать путь к claude…", "Locate claude…"),
     "hooks": ("Связать с Claude Code", "Connect to Claude Code"),
+    "ask": ("Разрешения из пузыря", "Permissions from the bubble"),
+    "games": ("Игры", "Games"),
+    "ball": ("Мячик", "Ball"),
+    "tag": ("Догонялки", "Tag"),
     "quit": ("Выход", "Quit"),
 }
 
@@ -63,6 +67,7 @@ class TrayMenu:
         self.listen = action("listen", settings.listen, lambda on: controller.set_listen(on))
         self.watch = action("watch", settings.watch, lambda on: controller.set_watch(on))
         self.llm = action("llm", settings.llm, lambda on: controller.set_llm(on))
+        self.ask = action("ask", settings.ask, lambda on: controller.set_ask(on))
         self.pick = action("pick", slot=lambda: controller.pick_claude())
         self.link = action("hooks", controller.hooks_installed(), self._link)
 
@@ -74,6 +79,13 @@ class TrayMenu:
             act.setChecked(lang == code)
             act.triggered.connect(lambda _=False, code=code: controller.set_language(code))
             self.language.addAction(act)
+        self.games = self.menu.addMenu(text(lang, "games"))
+        self.ball = QAction(text(lang, "ball"), self.games)
+        self.tag = QAction(text(lang, "tag"), self.games)
+        for act, name in ((self.ball, "ball"), (self.tag, "tag")):
+            act.setCheckable(True)
+            act.toggled.connect(lambda on, name=name: controller.set_game(name, on))
+            self.games.addAction(act)
         self.menu.addSeparator()
         self.quit = action("quit", slot=lambda: controller.quit())
 
@@ -109,10 +121,14 @@ class TrayMenu:
             (self.listen, "listen"),
             (self.watch, "watch"),
             (self.llm, "llm"),
+            (self.ask, "ask"),
             (self.pick, "pick"),
             (self.link, "hooks"),
             (self.quit, "quit"),
         ):
             act.setText(text(lang, key))
+        self.games.setTitle(text(lang, "games"))
+        self.ball.setText(text(lang, "ball"))
+        self.tag.setText(text(lang, "tag"))
         self.set_checked(self.ru, lang == "ru")
         self.set_checked(self.en, lang == "en")

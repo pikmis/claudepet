@@ -64,13 +64,19 @@ class Clawd:
 
         audio.spawn(self.listening, lambda e: self._deliver("audio", e, self.overlay.on_audio))
         context.spawn(self.watching, lambda e: self._deliver("context", e, self.overlay.on_context))
-        hub = hooks.Hub(self.haiku, lambda e: self._deliver("claude", e, self.overlay.on_claude))
+        hub = hooks.Hub(
+            self.haiku,
+            lambda e: self._deliver("claude", e, self.overlay.on_claude),
+            permissions_enabled=lambda: self.settings.ask,
+        )
+        self.overlay.on_decision = hub.resolve
         try:
             self.server = hooks.serve(self.token, hub)
         except OSError as e:
             self.server = None
             log(f"Claude Code hook endpoint unavailable: {e}")
 
+        self.overlay.pet.on_game_end = lambda name: self.tray.set_checked(getattr(self.tray, name), False)
         self.overlay.start()
 
     # ------------------------------------------------------------------ plumbing
@@ -137,6 +143,9 @@ class Clawd:
         else:
             threading.Thread(target=self._find_or_ask, name="clawd-find-claude", daemon=True).start()
 
+    def set_ask(self, on: bool) -> None:
+        self.update(lambda s: setattr(s, "ask", on))
+
     def hooks_installed(self) -> bool:
         path = hooks.settings_path()
         return bool(path) and hooks.is_installed(path)
@@ -154,6 +163,10 @@ class Clawd:
             return False
         self.notice("hooks_on" if on else "hooks_off")
         return True
+
+    def set_game(self, name: str, on: bool) -> None:
+        self.set_pet_visible(True)
+        self.overlay.set_game(name, on)
 
     def set_language(self, lang: str) -> None:
         self.haiku.lang = lang

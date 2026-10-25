@@ -9,14 +9,14 @@ import sys
 import time
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPen, QTextLayout, QTextOption
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetricsF, QGuiApplication, QPainter, QPen, QTextLayout, QTextOption
 from PySide6.QtWidgets import QWidget
 
 from . import claude
 from .brain import Brain
 from .pet import Pet
 from .phrases import PHRASES, TOOL_PHRASES
-from .sprite import GRID_H, GRID_W, Frame, render_particle, render_pet
+from .sprite import GRID_H, GRID_W, Frame, render_ball, render_particle, render_pet
 
 UNIT = 5
 MAX_PARTICLES = 14
@@ -28,6 +28,13 @@ BUBBLE_PAD_X = 10
 BUBBLE_PAD_Y = 6
 BUBBLE_RADIUS = 12
 BUBBLE_FADE = 0.15
+BUTTON_H = 24
+BUTTON_GAP = 6
+BUTTON_COLORS = {"allow": "#2e9e5b", "deny": "#d64545", None: "#8a8f98"}
+BUTTON_LABELS = {
+    "ru": (("Разрешить", "allow"), ("Отклонить", "deny"), ("В терминале", None)),
+    "en": (("Allow", "allow"), ("Deny", "deny"), ("In terminal", None)),
+}
 
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
@@ -60,7 +67,11 @@ class Overlay(QWidget):
         self.lang = haiku.lang
         self.brain = Brain(haiku, post)
         self.pet = Pet(UNIT, self)
-
+        self.ball_pixmap = None
+        self.perms: list[dict] = []  # permission questions waiting for an answer
+        self.on_decision = None  # called with (request id, "allow" | "deny" | None)
+        self.buttons: list[tuple[QRectF, str, str | None]] = []
+        self.button_specs: list[tuple[str, str | None, float]] = []
         self.dpr = 0.0
         self.cell = 0
         self.pixmaps: dict[Frame, object] = {}
@@ -118,6 +129,7 @@ class Overlay(QWidget):
         self.pet.set_unit(self.cell / dpr)
         self.pixmaps.clear()
         self.particle_pixmaps.clear()
+        self.ball_pixmap = None
 
     def raise_on_top(self) -> None:
         """The taskbar is topmost too and wins whenever it was clicked last."""
@@ -159,7 +171,7 @@ class Overlay(QWidget):
     def say_text(self, text: str, force: bool = False) -> None:
         """Forced lines (Claude's thoughts, reports) aren't talked over by idle chatter."""
         now = time.monotonic()
-        if not force and self.bubble_important and now < self.bubble_until:
+        if self.perms or (not force and self.bubble_important and now < self.bubble_until):
             return
         self.last_phrase = text
         self.bubble_important = force
@@ -185,6 +197,8 @@ class Overlay(QWidget):
         return layout, math.ceil(width), height
 
     def hide_bubble(self) -> None:
+        if self.perms:
+            return
         self.bubble_visible = False
         self.bubble_until = 0.0
         self.bubble_important = False
@@ -221,7 +235,59 @@ class Overlay(QWidget):
         self.pet.on_audio(event, time.monotonic())
 
     def on_claude(self, event: dict) -> None:
-        self.pet.on_claude(event, time.monotonic())
+        kind = event.get("kind")
+        if kind == "permission":
+            self.pet.on_permission(time.monotonic())
+            self.perms.append(event)
+            self.show_permission()
+        elif kind == "permission_done":
+            self.drop_permission(event["id"])
+        else:
+            self.pet.on_claude(event, time.monotonic())
+
+    def show_permission(self) -> None:
+        """The bubble turns into a question with buttons until somebody answers it."""
+        perm = self.perms[0]
+        ru = self.lang == "ru"
+        text = ("Claude просит: " if ru else "Claude asks: ") + f"{perm['tool']} {perm['detail']}".strip()
+        if len(self.perms) > 1:
+            text += f" (+{len(self.perms) - 1})"
+        self.bubble_layout, width, height = self.layout_text(text)
+        metrics = QFontMetricsF(self.bubble_font)
+        self.button_specs = [
+            (label, behavior, metrics.horizontalAdvance(label) + 18) for label, behavior in BUTTON_LABELS[self.lang]
+        ]
+        buttons_width = sum(w for _, _, w in self.button_specs) + BUTTON_GAP * (len(self.button_specs) - 1)
+        self.bubble_rect = QRectF(
+            0, 0, max(width, buttons_width) + 2 * BUBBLE_PAD_X, height + 8 + BUTTON_H + 2 * BUBBLE_PAD_Y
+        )
+        self.bubble_important = True
+        self.bubble_visible = True
+        self.bubble_until = math.inf
+
+    def decide(self, behavior: str | None) -> None:
+        perm = self.perms.pop(0)
+        if self.on_decision:
+            self.on_decision(perm["id"], behavior)
+        self.after_permission(behavior)
+
+    def drop_permission(self, request_id: str) -> None:
+        """Nobody answered in time (or Claude Code moved on): Claude Code's own dialog takes over."""
+        first = bool(self.perms) and self.perms[0]["id"] == request_id
+        self.perms = [p for p in self.perms if p["id"] != request_id]
+        if first:
+            self.after_permission(None, quiet=True)
+
+    def after_permission(self, behavior: str | None, quiet: bool = False) -> None:
+        if self.perms:
+            self.show_permission()
+            return
+        self.buttons = []
+        self.bubble_important = False
+        self.bubble_visible = False
+        self.bubble_until = 0.0
+        if not quiet and behavior in ("allow", "deny"):
+            self.say("perm_allow" if behavior == "allow" else "perm_deny")
 
     def on_notice(self, phrase: str) -> None:
         if phrase == "claude_found":
@@ -232,6 +298,20 @@ class Overlay(QWidget):
         self.lang = lang
         self.brain.forget()
         self.say("language", True)
+
+    def set_game(self, name: str, on: bool) -> None:
+        now = time.monotonic()
+        if name == "ball":
+            if on and self.pet.ball is None:
+                s = max(2, round(self.pet.unit * 0.6 * self.dpr))
+                self.ball_pixmap = render_ball(s, self.dpr)
+                self.pet.start_ball(now, 4 * s / self.dpr)
+            elif not on:
+                self.pet.stop_ball("ball_end")
+        elif on:
+            self.pet.start_tag(now)
+        else:
+            self.pet.stop_tag("tag_end")
 
     def recall(self) -> None:
         self.pet.recall(time.monotonic())
@@ -265,7 +345,7 @@ class Overlay(QWidget):
         self.fit_canvas()
         pet = self.pet
         pet.set_area(self.width(), self.height())
-        if self.isVisible() and not pet.held:
+        if self.isVisible() and not (pet.held or (pet.ball is not None and pet.ball.held)):
             pos = QCursor.pos() - self.geometry().topLeft()
             pet.set_cursor(pos.x(), pos.y(), now)
         pet.step(now)
@@ -300,9 +380,15 @@ class Overlay(QWidget):
         everywhere except Clawd himself."""
         pet = self.pet
         c = pet.cursor
-        over = bool(c) and pet.hit_test(c[0], c[1])
-        want = not (over or pet.held)
-        self.setCursor(Qt.ClosedHandCursor if pet.held else Qt.OpenHandCursor if over else Qt.ArrowCursor)
+        ball = pet.ball
+        over = bool(c) and (
+            pet.hit_test(c[0], c[1])
+            or (ball is not None and ball.hit(c[0], c[1]))
+            or (bool(self.perms) and self.bubble_rect.contains(c[0], c[1]))
+        )
+        held = pet.held or (ball is not None and ball.held)
+        want = not (over or held)
+        self.setCursor(Qt.ClosedHandCursor if held else Qt.OpenHandCursor if over else Qt.ArrowCursor)
         if want != self.passthrough:
             self.set_click_through(want)
 
@@ -330,11 +416,22 @@ class Overlay(QWidget):
         if by < 0:
             by = y + pet.h + margin
         self.bubble_rect = QRectF(bx, by, bw, bh)
+        self.buttons = []
+        if self.perms:
+            bx += BUBBLE_PAD_X
+            by += bh - BUBBLE_PAD_Y - BUTTON_H
+            for label, behavior, width in self.button_specs:
+                self.buttons.append((QRectF(bx, by, width, BUTTON_H), label, behavior))
+                bx += width + BUTTON_GAP
 
     def schedule_repaint(self, now: float) -> None:
         self.layout_bubble(now)
         self.last_render = now
         rects = [self.pet_rect()]
+        ball = self.pet.ball
+        if ball is not None:
+            r = ball.r + 6
+            rects.append(QRectF(ball.x - r, ball.y - r, 2 * r, 2 * r))
         if self.bubble_opacity > 0:
             rects.append(self.bubble_rect.adjusted(-8, -8, 8, 12))
         for p in self.particles:
@@ -372,6 +469,9 @@ class Overlay(QWidget):
         painter.drawPixmap(QPointF(-pet.w / 2, -pet.h * 0.6), pixmap)
         painter.restore()
 
+        ball = pet.ball
+        if ball is not None and self.ball_pixmap is not None:
+            painter.drawPixmap(QPointF(ball.x - ball.r, ball.y - ball.r), self.ball_pixmap)
         if self.bubble_opacity > 0:
             self.paint_bubble(painter)
         self.paint_particles(painter, now)
@@ -408,13 +508,34 @@ class Overlay(QWidget):
         painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), BUBBLE_RADIUS, BUBBLE_RADIUS)
         painter.setPen(QColor("#1a1a1a"))
         self.bubble_layout.draw(painter, QPointF(rect.x() + BUBBLE_PAD_X, rect.y() + BUBBLE_PAD_Y))
+        cursor = self.pet.cursor
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        for button, label, behavior in self.buttons:
+            hover = bool(cursor) and button.contains(cursor[0], cursor[1])
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(BUTTON_COLORS[behavior]).lighter(115 if hover else 100))
+            painter.drawRoundedRect(button, 6, 6)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(button, int(Qt.AlignCenter), label)
         painter.restore()
 
     # ------------------------------------------------------------------ mouse
 
     def mousePressEvent(self, event) -> None:
         pos = event.position()
-        if event.button() != Qt.LeftButton or not self.pet.hit_test(pos.x(), pos.y()):
+        if event.button() != Qt.LeftButton:
+            return
+        for button, _, behavior in self.buttons:
+            if self.perms and button.contains(pos):
+                self.decide(behavior)
+                self.update_passthrough()
+                return
+        ball = self.pet.ball
+        if ball is not None and ball.hit(pos.x(), pos.y()) and not self.pet.hit_test(pos.x(), pos.y()):
+            ball.grab(pos.x(), pos.y(), time.monotonic())
+            self.update_passthrough()
+            return
+        if not self.pet.hit_test(pos.x(), pos.y()):
             return
         self.pet.pointer_down(pos.x(), pos.y(), time.monotonic())
         self.update_passthrough()
@@ -423,12 +544,17 @@ class Overlay(QWidget):
         pos = event.position()
         now = time.monotonic()
         self.pet.set_cursor(pos.x(), pos.y(), now)
+        if self.pet.ball is not None and self.pet.ball.held:
+            self.pet.ball.drag(pos.x(), pos.y(), now, self.width(), self.height())
         self.pet.pointer_move(pos.x(), pos.y(), now)
         self.update_passthrough()
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
-            self.pet.pointer_up(time.monotonic())
+            now = time.monotonic()
+            if self.pet.ball is not None and self.pet.ball.held:
+                self.pet.ball.release(now)
+            self.pet.pointer_up(now)
 
     def contextMenuEvent(self, event) -> None:
         event.ignore()

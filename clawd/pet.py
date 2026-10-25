@@ -5,6 +5,8 @@ import math
 import random
 import time
 
+from .games import Ball
+from .pet_math import clamp
 from .sprite import GRID_H, GRID_W, SPINNER_LENGTH, Frame
 
 GRAVITY = 2600
@@ -31,11 +33,11 @@ SESSION_TIMEOUT = 10 * 60
 TOOL_SAY_EVERY = 8
 FAST_TYPING_KPM = 250
 
-
-def clamp(v: float, lo: float, hi: float) -> float:
-    if hi < lo or v < lo:
-        return lo
-    return hi if v > hi else v
+# Games
+RUN_SPEED = 190
+FLEE_SPEED = 240
+TAG_RADIUS = 210
+GAME_LENGTH = 180  # the ball goes away after this many seconds nobody touches it
 
 
 rand = random.uniform
@@ -113,6 +115,14 @@ class Pet:
         self.cursor: tuple[float, float, float] | None = None  # x, y, time it last moved
         self.hover_since = 0.0
         self.bounds = Bounds()
+        self.ball: Ball | None = None
+        self.ball_radius = 12.0
+        self.tag = False
+        self.tag_score = 0
+        self.tag_grace = 0.0
+        self.next_kick = 0.0
+        self.game_until = 0.0
+        self.on_game_end = None  # called with "ball" or "tag" when a game stops
 
     def set_unit(self, unit: float) -> None:
         old_w, old_h = self.w, self.h
@@ -177,6 +187,13 @@ class Pet:
             self.hop(420)
             self.fx.say("hello")
 
+        if self.ball is not None:
+            self.ball.step(dt, b.width, b.height)
+            if not self.ball.held and now - self.ball.last_touched > GAME_LENGTH:
+                self.stop_ball("ball_end")
+        if self.tag and now > self.game_until:
+            self.stop_tag("tag_end")
+
         if self.state == "press" and self.touch and now - self.touch["t0"] >= 0.4:
             self.start_pet(now)
         if self.pending_report and now >= self.report_at:
@@ -235,6 +252,9 @@ class Pet:
             self.fall(WALK_SPEED * self.look if self.state == "walk" else 0)
             return
         self.y = min(self.y, b.max_y)
+
+        if self.state in ("idle", "walk") and not self.claude_sessions and self.play_step(dt, now):
+            return
 
         if self.state == "walk":
             direction = 1 if self.walk_target > self.x else -1
@@ -425,6 +445,117 @@ class Pet:
         if announce:
             self.fx.say("claude_start", True)
 
+    # ------------------------------------------------------------------ games
+
+    def start_ball(self, now: float, radius: float) -> None:
+        b = self.bounds
+        self.ball_radius = radius
+        x = clamp(self.x + self.w / 2 + random.choice((-1, 1)) * rand(80, 200), radius, max(radius, b.width - radius))
+        self.ball = Ball(x, radius, radius)
+        self.ball.last_touched = now
+        self.last_interaction = now
+        self.fx.say("ball_start", True)
+
+    def stop_ball(self, phrase: str | None = None) -> None:
+        if self.ball is None:
+            return
+        self.ball = None
+        if phrase:
+            self.fx.say(phrase, True)
+        if self.on_game_end:
+            self.on_game_end("ball")
+
+    def start_tag(self, now: float) -> None:
+        self.tag = True
+        self.tag_score = 0
+        self.tag_grace = now + 1.0
+        self.game_until = now + 120
+        self.last_interaction = now
+        self.fx.say("tag_start", True)
+
+    def stop_tag(self, phrase: str | None = None) -> None:
+        if not self.tag:
+            return
+        self.tag = False
+        if phrase:
+            self.fx.say(phrase, True, {"score": self.tag_score})
+        if self.on_game_end:
+            self.on_game_end("tag")
+
+    def play_step(self, dt: float, now: float) -> bool:
+        """Runs after the ball or away from the cursor. True when it moved him this tick."""
+        if self.ball is not None and self.chase_ball(dt, now):
+            return True
+        return self.tag and self.flee_cursor(dt, now)
+
+    def chase_ball(self, dt: float, now: float) -> bool:
+        ball, b = self.ball, self.bounds
+        self.last_interaction = now
+        target = clamp(ball.x - self.w / 2, b.min_x, b.max_x)
+        dx = target - self.x
+        reach = self.w * 0.45
+        if abs(dx) > reach:
+            direction = 1 if dx > 0 else -1
+            self.state = "walk"
+            self.look = direction
+            self.x = clamp(self.x + direction * RUN_SPEED * dt, b.min_x, b.max_x)
+            return True
+        # He is under the ball.
+        self.state = "idle"
+        top = self.y + self.hop_off
+        reachable = top - 6 <= ball.y <= top + self.h and not ball.held
+        if reachable and now >= self.next_kick and not self.hop_active:
+            self.kick_ball(now)
+        else:
+            self.look = 0
+        return True
+
+    def kick_ball(self, now: float) -> None:
+        ball = self.ball
+        c = self.cursor
+        centre = self.x + self.w / 2
+        if c and abs(c[0] - centre) > 150:
+            direction = 1 if c[0] > centre else -1  # towards the player
+        else:
+            direction = 1 if ball.x >= centre else -1
+        if (direction > 0 and self.x >= self.bounds.max_x - 40) or (direction < 0 and self.x <= self.bounds.min_x + 40):
+            direction = -direction
+        ball.kick(direction * rand(380, 760), -rand(650, 1000), now)
+        self.next_kick = now + 0.6
+        self.look = direction
+        self.hop(300)
+        if random.random() < 0.3:
+            self.fx.say("kick")
+
+    def flee_cursor(self, dt: float, now: float) -> bool:
+        c, b = self.cursor, self.bounds
+        if not c or now - c[2] > 3 or now < self.tag_grace:
+            return False
+        cx, cy = self.x + self.w / 2, self.y + self.h / 2
+        dx = cx - c[0]
+        dist = math.hypot(dx, cy - c[1])
+        if dist > TAG_RADIUS:
+            return False
+        direction = (1 if dx > 0 else -1) if abs(dx) > 1 else random.choice((-1, 1))
+        nx = self.x + direction * FLEE_SPEED * dt
+        if nx < b.min_x or nx > b.max_x:
+            # Cornered: jump over the cursor.
+            self.x = clamp(nx, b.min_x, b.max_x)
+            if dist < 130:
+                self.state = "fly"
+                self.vx = -direction * rand(420, 560)
+                self.vy = -820.0
+                self.tag_grace = now + 0.8
+                self.fx.say("tag_flee")
+            else:
+                self.state = "idle"
+            return True
+        self.x = nx
+        self.look = direction
+        self.state = "walk"
+        self.last_interaction = now
+        return True
+
     # ------------------------------------------------------------------ outside events
 
     def on_claude(self, event: dict, now: float) -> None:
@@ -486,6 +617,15 @@ class Pet:
             sessions.pop(sid, None)
             if not sessions and self.claude_work and self.state == "code":
                 self.finish_activity(now)
+
+    def on_permission(self, now: float) -> None:
+        """Claude Code asks for an answer: get his attention."""
+        self.wave_until = now + 3
+        self.last_interaction = now
+        if self.state == "sleep":
+            self.wake_up(now, "wake")
+        else:
+            self.hop(400)
 
     def on_typing(self, kpm: int | None, now: float) -> None:
         if kpm is None:
@@ -929,6 +1069,14 @@ class Pet:
             self.fx.say("throw")
 
     def tap(self, now: float) -> None:
+        if self.tag:
+            self.tag_score += 1
+            self.tag_grace = now + 1.5
+            self.game_until = max(self.game_until, now + 60)
+            self.hop(520)
+            self.set_expr("happy", 1.2, now)
+            self.fx.say("tag_caught", True, {"score": self.tag_score})
+            return
         if now - self.last_tap < 0.32:
             self.last_tap = 0.0
             self.hop(720)
