@@ -1,0 +1,4 @@
+PySide6>=6.6
+numpy>=1.26
+soundcard>=0.4.4
+python-xlib>=0.33; sys_platform == "linux"

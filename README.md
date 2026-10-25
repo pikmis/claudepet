@@ -1,7 +1,7 @@
 # Clawd — десктопный питомец
 
 Пиксельный Claude, который живёт поверх рабочего стола (Windows / Linux).
-Порт плагина `clawd_pet` для exteraGram/AyuGram на Rust + Tauri 2.
+Порт плагина `clawd_pet` для exteraGram/AyuGram на Python + PySide6 (Qt 6).
 Внешний вид и цвета — как у логотипа Clawd в Claude Code CLI.
 
 Сейчас Clawd умеет:
@@ -22,7 +22,7 @@
 - засыпает, если его долго не трогать.
 
 - **дружит с Claude Code** (см. ниже): пока Claude работает над задачей, Clawd сидит за ноутбуком
-  и вслух рассказывает, что происходит («Правлю pet.js», мысли Claude в пересказе Haiku), зовёт,
+  и вслух рассказывает, что происходит («Правлю pet.py», мысли Claude в пересказе Haiku), зовёт,
   когда Claude ждёт твоего ответа, а когда задача готова — подпрыгивает и говорит, что проверить;
 - **болтает репликами от Claude Haiku**, учитывая время суток, открытое окно, музыку и то,
   как быстро ты печатаешь; замечает, когда переключаешься на новое приложение.
@@ -60,59 +60,55 @@ Clawd ничего не просит настраивать вручную — �
 
 ## Как устроено
 
-- `src-tauri/` — Rust: прозрачное окно без рамки поверх всех окон, растянутое на рабочую
-  область основного монитора. Всё окно пропускает клики насквозь; Rust опрашивает глобальную
-  позицию курсора и отдаёт её во фронтенд, а фронтенд отключает «сквозные клики», только когда
-  курсор над Clawd.
-- `src-tauri/src/audio.rs` — захват того, что играет компьютер (WASAPI loopback на Windows,
-  монитор звуковой карты PulseAudio/PipeWire на Linux) и простой анализ: громкие звуки,
+Пакет `clawd/` — чистый Python, окно и меню на Qt (PySide6):
+
+- `overlay.py` — прозрачное окно без рамки поверх всех окон, растянутое на рабочую область
+  основного монитора. Окно пропускает клики насквозь, а когда курсор над Clawd — перестаёт
+  (флаг `WindowTransparentForInput` переключается на лету). Здесь же рисуются пузырь с репликой
+  и частицы (сердечки, ноты, `zzz`), обрабатывается мышь.
+- `sprite.py` — пиксельные кадры Clawd; `pet.py` — состояния и физика; `brain.py` — описание
+  ситуации для Haiku и запас реплик; `phrases.py` — заготовленные фразы (ru/en).
+- `audio.py` — захват того, что играет компьютер (WASAPI loopback на Windows, монитор звуковой
+  карты PulseAudio/PipeWire на Linux, через `soundcard`) и простой анализ на numpy: громкие звуки,
   «играет музыка» (звук почти без пауз несколько секунд) и биты (всплески баса).
   Звук никуда не записывается и не отправляется.
-- `src/` — фронтенд без сборщика (чистый JS-модуль): `sprite.js` рисует пиксельные кадры,
-  `pet.js` — состояния и физика, `main.js` — отрисовка, мышь, связь с Rust.
+- `context.py` — активное окно и число нажатий клавиш (`ctypes` на Windows, `python-xlib` на Linux).
+- `claude.py` — поиск `claude` и вызовы Haiku; `hooks.py` — хуки Claude Code и HTTP-приёмник
+  на `127.0.0.1:47823`; `settings.py` — настройки; `tray.py`, `app.py` — меню в трее и сборка всего вместе.
 
 ## Запуск
 
-Нужен Rust (stable) и системные зависимости Tauri:
-
-- **Windows** — WebView2 (есть в Windows 10/11) и MSVC Build Tools.
-- **Linux (Debian/Ubuntu)**:
-  ```sh
-  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libpulse-dev
-  ```
-
-Запуск для разработки:
+Нужен Python 3.10+. На Linux ещё нужны `libpulse` (для звука) и X11 или XWayland.
 
 ```sh
-cd src-tauri
-cargo run
+python -m venv .venv
+.venv/Scripts/activate        # Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+python -m clawd               # или двойной клик по clawd.pyw на Windows (без консоли)
 ```
 
-Фронтенд можно отлаживать и в обычном браузере: `python3 -m http.server -d src` и открыть
-`http://localhost:8000` — без Tauri Clawd просто живёт во вкладке.
+Настройки лежат в `%APPDATA%\clawd\settings.json` (Linux: `~/.config/clawd/`).
 
-## Сборка установщиков
+Тесты:
 
 ```sh
-cargo install tauri-cli --version "^2" --locked
-cd src-tauri
-cargo tauri build
+pip install -r requirements-dev.txt
+python -m pytest
 ```
 
-Результат — в `src-tauri/target/release/bundle/` (`.msi`/NSIS на Windows, `.deb`/`.rpm`/AppImage на Linux).
-
-Иконки генерируются из спрайта: `python3 scripts/make_icons.py` (нужен Pillow).
+Хочется отдельный `.exe` — подойдёт `pip install pyinstaller` и
+`pyinstaller --noconsole --name Clawd -m clawd` (на Linux — пакетами/AppImage по вкусу).
 
 ## Ограничения
 
 - **Wayland** не даёт приложениям ставить окна в произвольные координаты и читать глобальный
-  курсор, поэтому на Wayland приложение само запускается через XWayland (`GDK_BACKEND=x11`).
+  курсор, поэтому на Wayland приложение само запускается через XWayland (`QT_QPA_PLATFORM=xcb`).
 - На Linux нужен композитор (в GNOME/KDE он есть всегда), иначе фон окна будет чёрным.
-- Пока Clawd живёт только на основном мониторе.
+- Несколько мониторов: Clawd живёт только на основном.
 - На Linux для звука нужен PulseAudio или PipeWire с `pipewire-pulse` (стоит по умолчанию почти везде).
 - Музыка отличается от речи по признакам громкости и спектра (в речи постоянные провалы между
   слогами, у шума — «плоский» спектр), поэтому голосовые, подкасты и видео с разговором не
   заставляют Clawd танцевать. Музыка распознаётся примерно через 8 секунд после начала.
   Если он ошибается на каком-то звуке — запиши фрагмент и прогони
-  `cargo run --example audio_probe -- clip.wav` в `src-tauri` (WAV 22050 Гц, моно, 16 бит).
+  `python scripts/audio_probe.py clip.wav` (WAV 22050 Гц, моно, 16 бит).
 - `CLAWD_DEBUG=1` печатает в консоль все события звука, окон и Claude Code.

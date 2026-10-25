@@ -1,3 +1,7 @@
-/src-tauri/target/
-/src-tauri/gen/
-node_modules/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+/build/
+/dist/
+*.spec
