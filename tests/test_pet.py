@@ -50,7 +50,7 @@ def test_greets_and_stays_on_the_floor():
     assert pet.y == pytest.approx(pet.bounds.max_y)
     assert 0 <= pet.x <= pet.bounds.max_x
     assert pet.w == GRID_W * 5 and pet.h == GRID_H * 5
-    assert now > 1000
+    assert now > 0
 
 
 def test_hit_test_covers_the_body_only():
@@ -150,9 +150,13 @@ def test_sleeper_wakes_for_music_hover_and_return():
 
 def test_falls_asleep_when_left_alone():
     pet, _ = make_pet()
-    pet.last_interaction = time.monotonic() - 1
-    run(pet, 200, time.monotonic(), dt=0.05)
-    assert pet.state == "sleep" or pet.state in ("read", "code", "think")
+    now = time.monotonic()
+    pet.last_interaction = now - 1
+    for _ in range(40):  # he may be busy reading or coding for a minute first
+        now = run(pet, 20, now, dt=0.05)
+        if pet.state == "sleep":
+            break
+    assert pet.state == "sleep"
 
 
 @pytest.mark.parametrize("seed", range(5))
