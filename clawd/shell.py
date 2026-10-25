@@ -28,21 +28,17 @@ def tail(text: str, limit: int) -> str:
 
 
 def _decode(data: bytes) -> str:
-    if sys.platform == "win32":
-        import ctypes
-
-        # PowerShell writes to a pipe in the console's OEM code page (cp866 on Russian systems).
-        encoding = f"cp{ctypes.windll.kernel32.GetOEMCP()}"
-        try:
-            return data.decode(encoding)
-        except (UnicodeDecodeError, LookupError):
-            pass
     return data.decode("utf-8", errors="replace")
+
+
+# PowerShell and the programs it starts write in the console's OEM code page (cp866 on Russian
+# systems, cp437 elsewhere, which can't show Cyrillic at all); ask for UTF-8 from all of them.
+UTF8_PRELUDE = "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
 
 
 def run(command: str) -> CommandResult:
     if sys.platform == "win32":
-        args = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+        args = ["powershell", "-NoProfile", "-NonInteractive", "-Command", UTF8_PRELUDE + command]
         extra = {"creationflags": 0x0800_0000}  # CREATE_NO_WINDOW
     else:
         args = ["sh", "-c", command]
