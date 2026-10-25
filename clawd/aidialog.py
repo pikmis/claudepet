@@ -65,9 +65,11 @@ TEXT = {
 class AiDialog(QDialog):
     tested = Signal(bool, str)
 
-    def __init__(self, lang: str, provider: str, saved: dict) -> None:
-        """`saved` maps provider -> {"base", "key", "model"} as in Settings.api."""
+    def __init__(self, lang: str, provider: str, saved: dict, test_fn) -> None:
+        """`saved` maps provider -> {"base", "key", "model"} as in Settings.api; `test_fn(provider,
+        base, key, model)` returns the model's reply or raises."""
         super().__init__()
+        self.test_fn = test_fn
         self.t = TEXT[lang]
         self.setWindowTitle(self.t["title"])
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
