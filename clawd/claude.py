@@ -14,6 +14,14 @@ from .settings import LANGUAGE_NAMES
 from .shell import shell_name
 
 TIMEOUT = 90
+# Names under which Haiku is known to Claude Code and the gateways in front of it.
+HAIKU_NAMES = (
+    "haiku",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-3-5-haiku-latest",
+    "claude-3-5-haiku-20241022",
+)
 VERSION_TIMEOUT = 20
 WINDOWS = sys.platform == "win32"
 
@@ -23,6 +31,11 @@ class HaikuError(Exception):
         """`fatal`: nothing will work until the settings change, so stop asking for a while."""
         super().__init__(message)
         self.fatal = fatal
+
+
+def is_model_error(message: str) -> bool:
+    low = message.lower()
+    return "selected model" in low or "may not exist" in low or "model_not_found" in low
 
 
 class Haiku:
@@ -63,12 +76,29 @@ class Haiku:
         try:
             return ask(cli, self.workdir, lang, text, web, self.api_model)
         except HaikuError as e:
-            # The account may not have the chosen model (the "haiku" alias can point at one it
-            # lacks): fall back to whatever Claude Code uses by default.
-            if self.api_model and ("selected model" in str(e) or "may not exist" in str(e)):
-                print(f"claude: model {self.api_model!r} unavailable, using the default", file=sys.stderr, flush=True)
-                self.api_model = ""
-                return ask(cli, self.workdir, lang, text, web, "")
+            if not (self.api_model and is_model_error(str(e))):
+                raise
+            # The account (or the gateway in front of it) may name the model differently. Try the
+            # usual names of the same family, keeping to Haiku when that is what was asked for.
+            family = "haiku" if "haiku" in self.api_model.lower() else ""
+            for candidate in HAIKU_NAMES if family else ():
+                if candidate == self.api_model:
+                    continue
+                try:
+                    out = ask(cli, self.workdir, lang, text, web, candidate)
+                except HaikuError as inner:
+                    if is_model_error(str(inner)):
+                        continue
+                    raise
+                print(f"claude: using model {candidate!r} instead of {self.api_model!r}", file=sys.stderr, flush=True)
+                self.api_model = candidate
+                return out
+            if family:
+                raise HaikuError(
+                    f"{e} Enter the exact Haiku name your provider uses in Model and API "
+                    "(see /model inside Claude Code).",
+                    fatal=True,
+                ) from None
             raise
 
     def run_web(self, prompt) -> str:

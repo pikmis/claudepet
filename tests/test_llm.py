@@ -143,24 +143,47 @@ def test_settings_keep_api_choices_and_fill_presets(tmp_path):
     assert broken.provider == "claude" and broken.api == {"openai": {"model": "m"}}
 
 
-def test_claude_model_falls_back_to_the_default_when_unavailable(tmp_path, monkeypatch):
+def test_haiku_tries_other_names_of_the_same_model(tmp_path, monkeypatch):
     from clawd import claude
 
     calls = []
 
     def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku"):
         calls.append(model)
-        if model:
-            raise HaikuError("claude failed: There's an issue with the selected model (claude-haiku-4-5). It may not exist")
+        if model != "claude-3-5-haiku-latest":
+            raise HaikuError(f"claude failed: There's an issue with the selected model ({model}). It may not exist")
         return "fine"
 
     monkeypatch.setattr(claude, "ask", fake_ask)
     haiku = Haiku(tmp_path, "en", True)
     haiku.cli = tmp_path / "claude"
-    assert haiku.api_model == "haiku"
     assert haiku.run(lambda lang: "x") == "fine"
-    assert calls == ["haiku", ""] and haiku.api_model == ""
-    assert haiku.run(lambda lang: "x") == "fine" and calls == ["haiku", "", ""]
+    assert calls == ["haiku", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"]
+    assert haiku.api_model == "claude-3-5-haiku-latest"
+    assert haiku.run(lambda lang: "x") == "fine" and calls[-1] == "claude-3-5-haiku-latest" and len(calls) == 5
+
+
+def test_haiku_never_falls_back_to_another_family_and_explains(tmp_path, monkeypatch):
+    from clawd import claude
+
+    calls = []
+
+    def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku"):
+        calls.append(model)
+        raise HaikuError("claude failed: There's an issue with the selected model. It may not exist")
+
+    monkeypatch.setattr(claude, "ask", fake_ask)
+    haiku = Haiku(tmp_path, "en", True)
+    haiku.cli = tmp_path / "claude"
+    with pytest.raises(HaikuError) as err:
+        haiku.run(lambda lang: "x")
+    assert "" not in calls and "exact Haiku name" in str(err.value) and err.value.fatal
+    # A model the user chose explicitly is not swapped for another family.
+    calls.clear()
+    haiku.api_model = "sonnet"
+    with pytest.raises(HaikuError):
+        haiku.run(lambda lang: "x")
+    assert calls == ["sonnet"]
 
 
 def test_claude_model_is_part_of_the_cli_arguments(tmp_path, monkeypatch):
