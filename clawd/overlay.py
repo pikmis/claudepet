@@ -187,6 +187,14 @@ class Overlay(QWidget):
         text = random.choice(options or phrases)
         self.say_text(PLACEHOLDER.sub(lambda m: str(values.get(m[1]) or ""), text), force)
 
+    def say_error(self, category: str, detail: str) -> None:
+        """A line for when something failed, with the reason so it can be fixed."""
+        text = random.choice(PHRASES[self.lang][category])
+        detail = " ".join(detail.split())
+        if detail:
+            text += f" [{detail[:160]}{'…' if len(detail) > 160 else ''}]"
+        self.say_text(text, True)
+
     def say_text(self, text: str, force: bool = False) -> None:
         """Forced lines (Claude's thoughts, reports) aren't talked over by idle chatter."""
         now = time.monotonic()

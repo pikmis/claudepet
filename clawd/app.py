@@ -266,7 +266,20 @@ class Clawd:
         threading.Thread(target=work, name="clawd-pick-claude", daemon=True).start()
 
 
+def log_to_file() -> None:
+    """Without a console (clawd.pyw, Clawd.exe) messages would vanish; keep them in clawd.log."""
+    path = data_dir() / "clawd.log"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "w" if path.exists() and path.stat().st_size > 1_000_000 else "a"
+        sys.stderr = open(path, mode, encoding="utf-8", buffering=1)
+    except OSError:
+        pass
+
+
 def main() -> int:
+    if sys.stderr is None or not sys.stderr.isatty():
+        log_to_file()
     if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY") and "QT_QPA_PLATFORM" not in os.environ:
         # Wayland doesn't let clients position windows or read the global cursor,
         # so run through XWayland unless the user picked a backend explicitly.

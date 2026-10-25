@@ -276,22 +276,25 @@ class Chat(QObject):
         history = [list(turn) for turn in self.history]
 
         def work() -> None:
+            error = ""
             try:
                 out = self.haiku.run_web(lambda lang: claude.chat_prompt(lang, context, history, message))
                 result = claude.parse_chat(out, 220)
+                if result is None:
+                    error = "empty answer"
             except Exception as e:
-                print(f"chat: {e}", file=sys.stderr)
-                result = None
-            self.post(lambda: self.answered(message, result))
+                print(f"chat: {e}", file=sys.stderr, flush=True)
+                result, error = None, str(e)
+            self.post(lambda: self.answered(message, result, error))
 
         threading.Thread(target=work, name="clawd-chat", daemon=True).start()
 
-    def answered(self, message: str, result) -> None:
+    def answered(self, message: str, result, error: str = "") -> None:
         overlay = self.overlay
         overlay.pet.awaiting_reply = False
         self.input.edit.setEnabled(True)
         if result is None:
-            overlay.say("chat_error", True)
+            overlay.say_error("chat_error", error)
         else:
             note = f"{result.text} [offered to run: {result.command}]" if result.command else result.text
             self.history = (self.history + [["user", message], ["clawd", note]])[-HISTORY_TURNS:]
