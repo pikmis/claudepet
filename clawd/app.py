@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 from . import audio, claude, context, hooks
 from .overlay import Overlay
+from .aidialog import AiDialog
 from .memory import Memory, SAVE_EVERY
 from .settings import Settings, config_dir, data_dir
 from .tray import TrayMenu, app_icon, text
@@ -49,6 +50,7 @@ class Clawd:
         self.dispatcher = Dispatcher()
         self.post = self.dispatcher.post
         self.haiku = claude.Haiku(workdir, self.settings.language, self.settings.llm)
+        self.apply_provider()
         self.listening = threading.Event()
         self.watching = threading.Event()
         if self.settings.listen:
@@ -146,9 +148,28 @@ class Clawd:
             self.overlay.on_context({"kind": "window", "app": "", "title": ""})
             self.overlay.on_context({"kind": "typing", "kpm": 0})
 
+    def apply_provider(self) -> None:
+        """Points Haiku at whatever the settings say writes his lines."""
+        s = self.settings
+        conf = s.api_config()
+        self.haiku.configure(s.provider, conf["base"], conf["key"], conf["model"])
+
+    def open_ai_settings(self) -> None:
+        dialog = AiDialog(self.haiku.lang, self.settings.provider, self.settings.api)
+        if dialog.exec() != AiDialog.Accepted:
+            return
+        provider, api = dialog.result_config()
+        self.update(lambda s: (setattr(s, "provider", provider), setattr(s, "api", api), setattr(s, "llm", True)))
+        self.apply_provider()
+        self.haiku.enabled = True
+        self.tray.set_checked(self.tray.llm, True)
+        self.overlay.brain.forget()
+
     def set_llm(self, on: bool) -> None:
         self.update(lambda s: setattr(s, "llm", on))
-        if not on:
+        if self.settings.provider != "claude":
+            self.haiku.enabled = on
+        elif not on:
             self.haiku.enabled = False
         elif self.haiku.cli is not None:
             self.haiku.enabled = True

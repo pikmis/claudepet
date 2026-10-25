@@ -13,7 +13,8 @@ TEXT = {
     "show": ("Показать", "Show"),
     "listen": ("Слушать звук", "Listen to sound"),
     "watch": ("Видеть окна и печать", "See windows and typing"),
-    "llm": ("Реплики через Claude (Haiku)", "Lines from Claude (Haiku)"),
+    "llm": ("Реплики от ИИ", "Lines from AI"),
+    "ai": ("Модель и API…", "Model and API…"),
     "pick": ("Указать путь к claude…", "Locate claude…"),
     "hooks": ("Связать с Claude Code", "Connect to Claude Code"),
     "ask": ("Разрешения из пузыря", "Permissions from the bubble"),
@@ -72,6 +73,7 @@ class TrayMenu:
         self.llm = action("llm", settings.llm, lambda on: controller.set_llm(on))
         self.ask = action("ask", settings.ask, lambda on: controller.set_ask(on))
         self.forget = action("forget", slot=lambda: controller.forget())
+        self.ai = action("ai", slot=lambda: controller.open_ai_settings())
         self.pick = action("pick", slot=lambda: controller.pick_claude())
         self.link = action("hooks", controller.hooks_installed(), self._link)
 
@@ -126,6 +128,7 @@ class TrayMenu:
             (self.listen, "listen"),
             (self.watch, "watch"),
             (self.llm, "llm"),
+            (self.ai, "ai"),
             (self.ask, "ask"),
             (self.forget, "forget"),
             (self.pick, "pick"),

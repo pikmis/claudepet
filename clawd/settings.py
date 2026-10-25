@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+
+from .llm import PRESETS, PROVIDERS
 
 LANGUAGES = ("ru", "en")
 LANGUAGE_NAMES = {"ru": "Russian", "en": "English"}
@@ -49,10 +51,25 @@ class Settings:
     watch: bool = True
     llm: bool = True
     ask: bool = True  # answer Claude Code's permission questions from the bubble
+    provider: str = "claude"  # which model writes his lines: "claude" (Claude Code CLI) or an API from llm.PRESETS
+    api: dict = field(default_factory=dict)  # per provider: {"key": ..., "model": ..., "base": ...}
 
     def __post_init__(self) -> None:
         if self.language not in LANGUAGES:
             self.language = system_language()
+        if self.provider != "claude" and self.provider not in PROVIDERS:
+            self.provider = "claude"
+
+    def api_config(self, provider: str | None = None) -> dict:
+        """What is saved for a provider, with the preset address and first suggested model filled in."""
+        provider = provider or self.provider
+        saved = self.api.get(provider, {})
+        preset = PRESETS.get(provider)
+        return {
+            "base": saved.get("base") or (preset[1] if preset else ""),
+            "key": saved.get("key", ""),
+            "model": saved.get("model") or (preset[2][0] if preset else ""),
+        }
 
     @classmethod
     def load(cls, path: Path) -> Settings:
@@ -73,6 +90,16 @@ class Settings:
                     clean[key] = value
             elif key == "language":
                 clean[key] = value
+            elif key == "provider":
+                if isinstance(value, str):
+                    clean[key] = value
+            elif key == "api":
+                if isinstance(value, dict):
+                    clean[key] = {
+                        str(name): {str(k): v for k, v in conf.items() if isinstance(v, str)}
+                        for name, conf in value.items()
+                        if isinstance(conf, dict)
+                    }
             elif isinstance(value, bool):
                 clean[key] = value
         return cls(**clean)

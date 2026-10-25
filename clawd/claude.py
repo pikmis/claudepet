@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import llm
 from .settings import LANGUAGE_NAMES
 from .shell import shell_name
 
@@ -18,7 +19,10 @@ WINDOWS = sys.platform == "win32"
 
 
 class HaikuError(Exception):
-    pass
+    def __init__(self, message: str, fatal: bool = False) -> None:
+        """`fatal`: nothing will work until the settings change, so stop asking for a while."""
+        super().__init__(message)
+        self.fatal = fatal
 
 
 class Haiku:
@@ -30,16 +34,31 @@ class Haiku:
         self.cli: Path | None = None
         self.lang = lang
         self.enabled = enabled
+        self.provider = "claude"  # or "openrouter", "openai", "custom": see llm.PRESETS
+        self.api_base = ""
+        self.api_key = ""
+        self.api_model = ""
+
+    def configure(self, provider: str, base: str = "", key: str = "", model: str = "") -> None:
+        self.provider = provider if provider in llm.PROVIDERS else "claude"
+        self.api_base, self.api_key, self.api_model = base, key, model
 
     def run(self, prompt, web: bool = False) -> str:
         """Runs a prompt written for the current language: `prompt(lang) -> str`.
         With `web`, Haiku may search and read the web while answering."""
         if not self.enabled:
-            raise HaikuError("disabled")
+            raise HaikuError("disabled", fatal=True)
+        lang = self.lang
+        if self.provider != "claude":
+            try:
+                return llm.complete(
+                    self.api_base, self.api_key, self.api_model, persona(lang), prompt(lang), self.provider
+                )
+            except llm.ApiError as e:
+                raise HaikuError(str(e), fatal=e.fatal) from None
         cli = self.cli
         if cli is None:
-            raise HaikuError("claude CLI not found")
-        lang = self.lang
+            raise HaikuError("claude CLI not found", fatal=True)
         return ask(cli, self.workdir, lang, prompt(lang), web)
 
     def run_web(self, prompt) -> str:

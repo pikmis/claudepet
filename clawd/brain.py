@@ -113,7 +113,7 @@ class Brain:
                 available = True
             except HaikuError as e:
                 # Not installed or switched off: stop asking for a while.
-                if "not found" in str(e) or "disabled" in str(e):
+                if e.fatal:
                     available = False
             except Exception:
                 pass
