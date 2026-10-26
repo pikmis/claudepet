@@ -33,7 +33,7 @@ TEXT = {
         "testing": "Проверяю…",
         "ok": "Работает. Ответ: {reply}",
         "fail": "Не вышло: {error}",
-        "hint_claude": "Нужен установленный и залогиненный Claude Code. Модель: haiku, sonnet, opus или полное имя "
+        "hint_claude": "Нужен установленный и залогиненный Claude Code. Модель: claude-haiku-5-5, haiku, sonnet, opus или полное имя "
         "(пусто — модель Claude Code по умолчанию). Только в этом режиме Clawd умеет искать в интернете.",
         "hint_api": "Подойдёт любой сервис с OpenAI-совместимым API (/chat/completions). Ключ хранится в settings.json "
         "на этом компьютере, у локальных серверов (Ollama, LM Studio) ключ не нужен.",
@@ -52,7 +52,7 @@ TEXT = {
         "testing": "Testing…",
         "ok": "Works. Reply: {reply}",
         "fail": "Failed: {error}",
-        "hint_claude": "Needs Claude Code installed and logged in. Model: haiku, sonnet, opus or a full name "
+        "hint_claude": "Needs Claude Code installed and logged in. Model: claude-haiku-5-5, haiku, sonnet, opus or a full name "
         "(empty: Claude Code's default). Web search in the chat works only in this mode.",
         "hint_api": "Any service with an OpenAI-compatible API (/chat/completions) works. The key is stored in "
         "settings.json on this computer; local servers (Ollama, LM Studio) need no key.",
@@ -131,7 +131,7 @@ class AiDialog(QDialog):
         return {
             "base": preset[1] if preset else "",
             "key": "",
-            "model": preset[2][0] if preset else "haiku",
+            "model": preset[2][0] if preset else "claude-haiku-5-5",
         }
 
     def load_fields(self) -> None:
@@ -145,7 +145,7 @@ class AiDialog(QDialog):
         self.base.setText(conf["base"])
         self.key.setText(conf["key"])
         self.model.clear()
-        self.model.addItems(llm.PRESETS[name][2] if api else ["haiku", "sonnet", "opus"])
+        self.model.addItems(llm.PRESETS[name][2] if api else ["claude-haiku-5-5", "haiku", "sonnet", "opus"])
         self.model.setCurrentText(conf["model"])
         for widget in (self.base, self.key, self.show_key):
             widget.setEnabled(api)

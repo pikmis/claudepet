@@ -157,10 +157,13 @@ def test_haiku_tries_other_names_of_the_same_model(tmp_path, monkeypatch):
     monkeypatch.setattr(claude, "ask", fake_ask)
     haiku = Haiku(tmp_path, "en", True)
     haiku.cli = tmp_path / "claude"
+    assert haiku.api_model == "claude-haiku-5-5"
     assert haiku.run(lambda lang: "x") == "fine"
-    assert calls == ["haiku", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"]
+    assert calls == [
+        "claude-haiku-5-5", "haiku", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"
+    ]
     assert haiku.api_model == "claude-3-5-haiku-latest"
-    assert haiku.run(lambda lang: "x") == "fine" and calls[-1] == "claude-3-5-haiku-latest" and len(calls) == 5
+    assert haiku.run(lambda lang: "x") == "fine" and calls[-1] == "claude-3-5-haiku-latest" and len(calls) == 6
 
 
 def test_haiku_never_falls_back_to_another_family_and_explains(tmp_path, monkeypatch):

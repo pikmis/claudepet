@@ -14,8 +14,10 @@ from .settings import LANGUAGE_NAMES
 from .shell import shell_name
 
 TIMEOUT = 90
+DEFAULT_MODEL = "claude-haiku-5-5"
 # Names under which Haiku is known to Claude Code and the gateways in front of it.
 HAIKU_NAMES = (
+    "claude-haiku-5-5",
     "haiku",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
@@ -50,7 +52,7 @@ class Haiku:
         self.provider = "claude"  # or "openrouter", "openai", "custom": see llm.PRESETS
         self.api_base = ""
         self.api_key = ""
-        self.api_model = "haiku"  # for Claude Code this is the --model alias; empty means its default
+        self.api_model = DEFAULT_MODEL  # for Claude Code this is the --model alias; empty means its default
 
     def configure(self, provider: str, base: str = "", key: str = "", model: str = "") -> None:
         self.provider = provider if provider in llm.PROVIDERS else "claude"
@@ -263,7 +265,7 @@ def verify(path: Path) -> str:
     raise HaikuError(f"unexpected --version output: {line}")
 
 
-def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False, model: str = "haiku") -> str:
+def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False, model: str = DEFAULT_MODEL) -> str:
     """Runs one headless Haiku turn with no MCP servers, skills or hooks. Its only possible
     tools are web search and fetch, when `web` is set; never the shell or files.
     `workdir` is a private folder, so no project CLAUDE.md gets loaded."""
