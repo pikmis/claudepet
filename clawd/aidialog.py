@@ -37,6 +37,7 @@ TEXT = {
         "(пусто — модель Claude Code по умолчанию). Только в этом режиме Clawd умеет искать в интернете.",
         "hint_api": "Подойдёт любой сервис с OpenAI-совместимым API (/chat/completions). Ключ хранится в settings.json "
         "на этом компьютере, у локальных серверов (Ollama, LM Studio) ключ не нужен.",
+        "isolated": "Не читать мои настройки Claude Code (settings.json): войти по аккаунту, без шлюза и своих моделей",
         "save": "Сохранить",
         "cancel": "Отмена",
     },
@@ -56,6 +57,7 @@ TEXT = {
         "(empty: Claude Code's default). Web search in the chat works only in this mode.",
         "hint_api": "Any service with an OpenAI-compatible API (/chat/completions) works. The key is stored in "
         "settings.json on this computer; local servers (Ollama, LM Studio) need no key.",
+        "isolated": "Ignore my Claude Code settings.json (gateway, env, custom models): use the account login",
         "save": "Save",
         "cancel": "Cancel",
     },
@@ -89,6 +91,7 @@ class AiDialog(QDialog):
         self.show_key.toggled.connect(lambda on: self.key.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
         self.model = QComboBox()
         self.model.setEditable(True)
+        self.isolated = QCheckBox(self.t["isolated"])
         self.hint = QLabel()
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: #666;")
@@ -114,6 +117,7 @@ class AiDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(self.isolated)
         layout.addWidget(self.hint)
         layout.addLayout(test_row)
         layout.addWidget(buttons)
@@ -149,12 +153,17 @@ class AiDialog(QDialog):
         self.model.setCurrentText(conf["model"])
         for widget in (self.base, self.key, self.show_key):
             widget.setEnabled(api)
+        self.isolated.setVisible(not api)
+        self.isolated.setChecked(saved.get("isolated") == "1")
         self.hint.setText(self.t["hint_api" if api else "hint_claude"])
         self.status.clear()
 
     def store_fields(self) -> None:
         if self.current == "claude":
-            self.config["claude"] = {"model": self.model.currentText().strip()}
+            self.config["claude"] = {
+                "model": self.model.currentText().strip(),
+                "isolated": "1" if self.isolated.isChecked() else "",
+            }
         else:
             self.config[self.current] = {
                 "base": self.base.text().strip(),
@@ -178,13 +187,14 @@ class AiDialog(QDialog):
     def run_test(self) -> None:
         name = self.provider.currentData()
         base, key, model = self.base.text(), self.key.text(), self.model.currentText()
+        isolated = self.isolated.isChecked()
         self.status.setStyleSheet("")
         self.status.setText(self.t["testing"])
         self.test.setEnabled(False)
 
         def work() -> None:
             try:
-                reply = self.test_fn(name, base, key, model)
+                reply = self.test_fn(name, base, key, model, isolated)
                 self.tested.emit(True, " ".join(reply.split())[:80])
             except Exception as e:  # never leave the button disabled
                 self.tested.emit(False, str(e) or repr(e))

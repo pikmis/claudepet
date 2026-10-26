@@ -52,9 +52,11 @@ class Haiku:
         self.provider = "claude"  # or "openrouter", "openai", "custom": see llm.PRESETS
         self.api_base = ""
         self.api_key = ""
+        self.isolated = False  # Claude Code: ignore the user's settings.json (gateways, env, hooks)
         self.api_model = DEFAULT_MODEL  # for Claude Code this is the --model alias; empty means its default
 
-    def configure(self, provider: str, base: str = "", key: str = "", model: str = "") -> None:
+    def configure(self, provider: str, base: str = "", key: str = "", model: str = "", isolated: bool = False) -> None:
+        self.isolated = isolated
         self.provider = provider if provider in llm.PROVIDERS else "claude"
         self.api_base, self.api_key, self.api_model = base, key, model
 
@@ -76,7 +78,7 @@ class Haiku:
             raise HaikuError("claude CLI not found", fatal=True)
         text = prompt(lang)
         try:
-            return ask(cli, self.workdir, lang, text, web, self.api_model)
+            return ask(cli, self.workdir, lang, text, web, self.api_model, self.isolated)
         except HaikuError as e:
             if not (self.api_model and is_model_error(str(e))):
                 raise
@@ -89,7 +91,7 @@ class Haiku:
                     continue
                 tried.append(candidate)
                 try:
-                    out = ask(cli, self.workdir, lang, text, web, candidate)
+                    out = ask(cli, self.workdir, lang, text, web, candidate, self.isolated)
                 except HaikuError as inner:
                     if is_model_error(str(inner)):
                         continue
@@ -272,7 +274,8 @@ def verify(path: Path) -> str:
     raise HaikuError(f"unexpected --version output: {line}")
 
 
-def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False, model: str = DEFAULT_MODEL) -> str:
+def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False, model: str = DEFAULT_MODEL,
+        isolated: bool = False) -> str:
     """Runs one headless Haiku turn with no MCP servers, skills or hooks. Its only possible
     tools are web search and fetch, when `web` is set; never the shell or files.
     `workdir` is a private folder, so no project CLAUDE.md gets loaded."""
@@ -282,6 +285,7 @@ def ask(cli: Path, workdir: Path, lang: str, prompt: str, web: bool = False, mod
         *(["--allowedTools", tools] if web else []),
         "-p",
         *(["--model", model] if model else []),
+        *(["--setting-sources", "project"] if isolated else []),
         "--output-format",
         "text",
         "--no-session-persistence",

@@ -68,6 +68,7 @@ class Settings:
         return {
             "base": saved.get("base") or (preset[1] if preset else ""),
             "key": saved.get("key", ""),
+            "isolated": saved.get("isolated") == "1",
             "model": saved.get("model") or (preset[2][0] if preset else "claude-haiku-5-5" if provider == "claude" else ""),
         }
 

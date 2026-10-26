@@ -136,7 +136,7 @@ def test_settings_keep_api_choices_and_fill_presets(tmp_path):
     loaded = Settings.load(path)
     assert loaded == settings
     conf = loaded.api_config()
-    assert conf == {"base": "https://openrouter.ai/api/v1", "key": "sk-1", "model": "x/y"}
+    assert conf == {"base": "https://openrouter.ai/api/v1", "key": "sk-1", "model": "x/y", "isolated": False}
     assert loaded.api_config("openai")["model"] == "gpt-4o-mini" and loaded.api_config("openai")["key"] == ""
     path.write_text('{"provider": "weird", "api": {"openai": {"key": 5, "model": "m"}, "bad": 1}}', encoding="utf-8")
     broken = Settings.load(path)
@@ -148,7 +148,7 @@ def test_haiku_tries_other_names_of_the_same_model(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku"):
+    def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku", isolated=False):
         calls.append(model)
         if model != "claude-haiku-4-5-20251001":
             raise HaikuError(f"claude failed: There's an issue with the selected model ({model}). It may not exist")
@@ -167,7 +167,7 @@ def test_haiku_tries_other_names_of_the_same_model(tmp_path, monkeypatch):
 def test_a_retired_model_counts_as_unavailable(tmp_path, monkeypatch):
     from clawd import claude
 
-    def fake_ask(cli, workdir, lang, prompt, web=False, model="x"):
+    def fake_ask(cli, workdir, lang, prompt, web=False, model="x", isolated=False):
         if model == "claude-haiku-4-5":
             raise HaikuError("claude failed: Claude 3.5 Haiku was retired. Consider switching to a newer model.")
         if model != "claude-haiku-4-5-20251001":
@@ -185,7 +185,7 @@ def test_haiku_never_falls_back_to_another_family_and_explains(tmp_path, monkeyp
 
     calls = []
 
-    def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku"):
+    def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku", isolated=False):
         calls.append(model)
         raise HaikuError("claude failed: There's an issue with the selected model. It may not exist")
 
@@ -215,4 +215,6 @@ def test_claude_model_is_part_of_the_cli_arguments(tmp_path, monkeypatch):
     monkeypatch.setattr(claude.subprocess, "run", fake_run)
     claude.ask(tmp_path / "claude", tmp_path, "en", "hi", False, "sonnet")
     claude.ask(tmp_path / "claude", tmp_path, "en", "hi", False, "")
+    claude.ask(tmp_path / "claude", tmp_path, "en", "hi", False, "sonnet", True)
     assert seen[0][seen[0].index("--model") + 1] == "sonnet" and "--model" not in seen[1]
+    assert "--setting-sources" not in seen[0] and seen[2][seen[2].index("--setting-sources") + 1] == "project"

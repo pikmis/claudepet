@@ -152,16 +152,16 @@ class Clawd:
         """Points Haiku at whatever the settings say writes his lines."""
         s = self.settings
         conf = s.api_config()
-        self.haiku.configure(s.provider, conf["base"], conf["key"], conf["model"])
+        self.haiku.configure(s.provider, conf["base"], conf["key"], conf["model"], conf["isolated"])
 
-    def test_model(self, provider: str, base: str, key: str, model: str) -> str:
+    def test_model(self, provider: str, base: str, key: str, model: str, isolated: bool = False) -> str:
         """A tiny request with the values typed into the settings window (runs off the UI thread)."""
         prompt = "Reply with one short word: ok"
         if provider != "claude":
             return llm.complete(base, key, model, claude.persona("en"), prompt, provider)
         if self.haiku.cli is None:
             raise claude.HaikuError("claude CLI not found")
-        return claude.ask(self.haiku.cli, self.haiku.workdir, "en", prompt, False, model.strip())
+        return claude.ask(self.haiku.cli, self.haiku.workdir, "en", prompt, False, model.strip(), isolated)
 
     def open_ai_settings(self) -> None:
         dialog = AiDialog(self.haiku.lang, self.settings.provider, self.settings.api, self.test_model)
