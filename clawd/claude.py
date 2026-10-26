@@ -21,8 +21,6 @@ HAIKU_NAMES = (
     "haiku",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
-    "claude-3-5-haiku-latest",
-    "claude-3-5-haiku-20241022",
 )
 VERSION_TIMEOUT = 20
 WINDOWS = sys.platform == "win32"
@@ -37,7 +35,9 @@ class HaikuError(Exception):
 
 def is_model_error(message: str) -> bool:
     low = message.lower()
-    return "selected model" in low or "may not exist" in low or "model_not_found" in low
+    return any(
+        hint in low for hint in ("selected model", "may not exist", "model_not_found", "retired", "not available")
+    )
 
 
 class Haiku:
@@ -83,9 +83,11 @@ class Haiku:
             # The account (or the gateway in front of it) may name the model differently. Try the
             # usual names of the same family, keeping to Haiku when that is what was asked for.
             family = "haiku" if "haiku" in self.api_model.lower() else ""
+            first, tried = e, [self.api_model]
             for candidate in HAIKU_NAMES if family else ():
-                if candidate == self.api_model:
+                if candidate in tried:
                     continue
+                tried.append(candidate)
                 try:
                     out = ask(cli, self.workdir, lang, text, web, candidate)
                 except HaikuError as inner:
@@ -97,6 +99,11 @@ class Haiku:
                 return out
             if family:
                 raise HaikuError(
+                    f"No Haiku model worked (tried {', '.join(tried)}). Enter the exact name your provider uses "
+                    f"in Model and API (see /model in Claude Code). First error: {first}",
+                    fatal=True,
+                ) from None
+            raise HaikuError(
                     f"{e} Enter the exact Haiku name your provider uses in Model and API "
                     "(see /model inside Claude Code).",
                     fatal=True,

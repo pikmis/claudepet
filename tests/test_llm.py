@@ -150,7 +150,7 @@ def test_haiku_tries_other_names_of_the_same_model(tmp_path, monkeypatch):
 
     def fake_ask(cli, workdir, lang, prompt, web=False, model="haiku"):
         calls.append(model)
-        if model != "claude-3-5-haiku-latest":
+        if model != "claude-haiku-4-5-20251001":
             raise HaikuError(f"claude failed: There's an issue with the selected model ({model}). It may not exist")
         return "fine"
 
@@ -159,11 +159,25 @@ def test_haiku_tries_other_names_of_the_same_model(tmp_path, monkeypatch):
     haiku.cli = tmp_path / "claude"
     assert haiku.api_model == "claude-haiku-5-5"
     assert haiku.run(lambda lang: "x") == "fine"
-    assert calls == [
-        "claude-haiku-5-5", "haiku", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"
-    ]
-    assert haiku.api_model == "claude-3-5-haiku-latest"
-    assert haiku.run(lambda lang: "x") == "fine" and calls[-1] == "claude-3-5-haiku-latest" and len(calls) == 6
+    assert calls == ["claude-haiku-5-5", "haiku", "claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+    assert haiku.api_model == "claude-haiku-4-5-20251001"
+    assert haiku.run(lambda lang: "x") == "fine" and calls[-1] == "claude-haiku-4-5-20251001" and len(calls) == 5
+
+
+def test_a_retired_model_counts_as_unavailable(tmp_path, monkeypatch):
+    from clawd import claude
+
+    def fake_ask(cli, workdir, lang, prompt, web=False, model="x"):
+        if model == "claude-haiku-4-5":
+            raise HaikuError("claude failed: Claude 3.5 Haiku was retired. Consider switching to a newer model.")
+        if model != "claude-haiku-4-5-20251001":
+            raise HaikuError("claude failed: There's an issue with the selected model")
+        return "fine"
+
+    monkeypatch.setattr(claude, "ask", fake_ask)
+    haiku = Haiku(tmp_path, "en", True)
+    haiku.cli = tmp_path / "claude"
+    assert haiku.run(lambda lang: "x") == "fine"
 
 
 def test_haiku_never_falls_back_to_another_family_and_explains(tmp_path, monkeypatch):
@@ -180,7 +194,7 @@ def test_haiku_never_falls_back_to_another_family_and_explains(tmp_path, monkeyp
     haiku.cli = tmp_path / "claude"
     with pytest.raises(HaikuError) as err:
         haiku.run(lambda lang: "x")
-    assert "" not in calls and "exact Haiku name" in str(err.value) and err.value.fatal
+    assert "" not in calls and "exact name" in str(err.value) and "claude-haiku-5-5" in str(err.value) and err.value.fatal
     # A model the user chose explicitly is not swapped for another family.
     calls.clear()
     haiku.api_model = "sonnet"
